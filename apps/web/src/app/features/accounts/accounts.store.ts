@@ -30,6 +30,20 @@ export const AccountsStore = signalStore(
       const account = await firstValueFrom(http.post<AccountView>(`/api/v1/whatsapp/accounts/${id}/${kind}`, {}));
       patchState(store, { accounts: store.accounts().map(current => current._id === id ? account : current) });
     },
+    async getQr(id: string): Promise<string | null> {
+      try {
+        const res = await firstValueFrom(http.get<{ qr: string | null }>(`/api/v1/whatsapp/accounts/${id}/qr`));
+        if (res.qr) {
+          const QRCode = (await import('qrcode')).default;
+          const image = await QRCode.toDataURL(res.qr);
+          patchState(store, { qr: { accountId: id, image } });
+          return image;
+        }
+      } catch {
+        // endpoint may be temporarily unavailable
+      }
+      return null;
+    },
     async syncHistory(id: string): Promise<void> {
       await firstValueFrom(http.post(`/api/v1/whatsapp/accounts/${id}/sync-history`, {}));
     },

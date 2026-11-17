@@ -99,8 +99,17 @@ export class WorkerRuntimeService implements OnModuleInit, OnModuleDestroy {
         } else if (event.type === 'wa.message.status') {
           const inboundRead = await outbound.status(event);
           if (inboundRead) await processor.syncMessageReadState(event);
+        } else if (event.type === 'wa.qr') {
+          await redis.set(`hala:qr:${event.accountId}`, event.qr, 'EX', 60);
+          await redis.publish('hala.events', JSON.stringify({ event }));
+        } else if (event.type === 'wa.connection') {
+          if (event.status === 'connected' || event.status === 'logged_out') {
+            await redis.del(`hala:qr:${event.accountId}`);
+          }
+          await redis.publish('hala.events', JSON.stringify({ event }));
+        } else {
+          await redis.publish('hala.events', JSON.stringify({ event }));
         }
-        else await redis.publish('hala.events', JSON.stringify({ event }));
       } }, env.MAX_SESSIONS_PER_WORKER);
     const outbound = new OutboundProcessor({ connection: mongo, storage, storageForDriver: driver => storage.forDriver(driver), manager: this.manager,
       publish: async event => { await redis.publish('hala.events', JSON.stringify({ event })); } });

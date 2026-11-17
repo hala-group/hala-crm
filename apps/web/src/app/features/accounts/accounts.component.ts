@@ -308,16 +308,24 @@ const PRESET_COLORS = [
                   type="button"
                   class="btn-action-primary btn-action-qr"
                   *halaHasPermission="'accounts:connect'"
-                  (click)="operate(account._id, 'connect')"
+                  [disabled]="connectingId() === account._id"
+                  (click)="handleQrConnect(account._id)"
                   title="مسح رمز الاستجابة السريعة QR للربط"
                 >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <rect x="3" y="3" width="7" height="7"/>
-                    <rect x="14" y="3" width="7" height="7"/>
-                    <rect x="14" y="14" width="7" height="7"/>
-                    <rect x="3" y="14" width="7" height="7"/>
-                  </svg>
-                  <span>مسح رمز QR للربط</span>
+                  @if (connectingId() === account._id) {
+                    <svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                    </svg>
+                    <span>جارٍ التوليد…</span>
+                  } @else {
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect x="3" y="3" width="7" height="7"/>
+                      <rect x="14" y="3" width="7" height="7"/>
+                      <rect x="14" y="14" width="7" height="7"/>
+                      <rect x="3" y="14" width="7" height="7"/>
+                    </svg>
+                    <span>مسح رمز QR للربط</span>
+                  }
                 </button>
               }
 
@@ -1656,6 +1664,7 @@ export class AccountsComponent implements OnInit {
   readonly error = signal('');
   readonly notice = signal('');
   readonly syncingId = signal<string | null>(null);
+  readonly connectingId = signal<string | null>(null);
   readonly showCreatePanel = signal(false);
   readonly activeMenuId = signal<string | null>(null);
   readonly showMembersModal = signal<string | null>(null);
@@ -1807,6 +1816,27 @@ export class AccountsComponent implements OnInit {
       this.notice.set('تمت إضافة رقم الواتساب بنجاح! يمكنك الآن مسح الرمز لربطه.');
     } catch {
       this.error.set('تعذر إضافة الرقم، يرجى المحاولة مجدداً.');
+    }
+  }
+
+  async handleQrConnect(id: string): Promise<void> {
+    this.connectingId.set(id);
+    this.error.set('');
+    try {
+      const existing = await this.accounts.getQr(id);
+      if (existing) return;
+      await this.accounts.operation(id, 'connect');
+      this.notice.set('جارٍ تشغيل الجلسة وتوليد رمز QR للربط... انتظر لحظات.');
+      for (let i = 0; i < 5; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        if (this.accounts.qr()?.accountId === id) return;
+        const qr = await this.accounts.getQr(id);
+        if (qr) return;
+      }
+    } catch {
+      this.error.set('تعذر طلب رمز QR. تأكد من عمل الخادم وحاول مجدداً.');
+    } finally {
+      this.connectingId.set(null);
     }
   }
 

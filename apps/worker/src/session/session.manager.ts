@@ -40,7 +40,11 @@ export class SessionManager {
     if (event.type === 'wa.qr' || event.type === 'wa.connection') await this.repository.update(event, this.leases.workerId);
     await this.events.publish(event);
     if (event.type === 'wa.connection' && (event.status === 'disconnected' || event.status === 'logged_out' || event.status === 'error')) {
-      queueMicrotask(() => { void this.close(event.accountId, event.status === 'logged_out'); });
+      queueMicrotask(() => {
+        void this.close(event.accountId, event.status === 'logged_out').then(() => {
+          if (event.status !== 'logged_out') void this.tick();
+        });
+      });
     }
   }
 

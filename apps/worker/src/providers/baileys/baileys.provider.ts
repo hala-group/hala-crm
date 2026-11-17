@@ -149,7 +149,10 @@ export class BaileysProvider implements WhatsAppProvider {
     };
     socket.ev.on('creds.update', () => { void saveCreds().catch(() => this.logger.warn('Credential write rejected')); });
     socket.ev.on('connection.update', update => {
-      if (update.qr) notify({ type: 'wa.qr', accountId: account.id, tenantId: account.tenantId, qr: update.qr });
+      if (update.qr) {
+        this.logger.log(`WhatsApp QR code generated for account ${account.id}`);
+        notify({ type: 'wa.qr', accountId: account.id, tenantId: account.tenantId, qr: update.qr });
+      }
       if (update.connection === 'open') {
         notify({ type: 'wa.connection', accountId: account.id, tenantId: account.tenantId, status: 'connected', phoneNumber: socket.user?.id });
         void (async () => {
@@ -171,8 +174,6 @@ export class BaileysProvider implements WhatsAppProvider {
         if (code === DisconnectReason.loggedOut) {
           this.initialHistory.clear(account.id);
           notify({ type: 'wa.connection', accountId: account.id, tenantId: account.tenantId, status: 'logged_out' });
-        } else if (code === DisconnectReason.restartRequired) {
-          this.logger.log(`WhatsApp restart required (515) for account ${account.id} — keeping session active for reconnect`);
         } else {
           notify({ type: 'wa.connection', accountId: account.id, tenantId: account.tenantId, status: 'disconnected' });
         }

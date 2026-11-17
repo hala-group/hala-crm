@@ -47,6 +47,13 @@ export class AccountsController {
     return this.accounts.remove(request.principal, params.id);
   }
 
+  @Get(':id/qr')
+  @CheckPolicy('accounts:connect')
+  @ApiOperation({ summary: 'Get active QR code for a WhatsApp account' })
+  getQr(@Req() request: AuthenticatedRequest, @Param({ schema: idParamsSchema }) params: { id: string }) {
+    return this.accounts.getQr(request.principal, params.id);
+  }
+
   @Post(':id/connect')
   @CheckPolicy('accounts:connect')
   @ApiOperation({ summary: 'Request a WhatsApp session' })

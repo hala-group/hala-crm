@@ -160,6 +160,12 @@ export class AccountsService {
     return { deleted: { conversations: conversationResult.deletedCount, messages: messageResult.deletedCount, media: mediaRecords.length } };
   }
 
+  async getQr(principal: Principal, id: string): Promise<{ qr: string | null }> {
+    await this.get(principal, id, 'connect');
+    const qr = await this.bus.get(`hala:qr:${id}`);
+    return { qr };
+  }
+
   async remove(principal: Principal, id: string): Promise<{ ok: true }> {
     const account = await this.get(principal, id, 'delete');
     const dataScope = { tenantId: account.tenantId, accountId: account._id };
