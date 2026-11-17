@@ -1,5 +1,5 @@
 import makeWASocket, { areJidsSameUser, Browsers, BufferJSON, decryptPollVote, DisconnectReason, downloadHistory, extractMessageContent, jidNormalizedUser,
-  getKeyAuthor, makeCacheableSignalKeyStore, proto, type AnyMessageContent, type CacheStore, type WASocket, type WAMessage, type WAMessageKey } from '@whiskeysockets/baileys';
+  getKeyAuthor, makeCacheableSignalKeyStore, processHistoryMessage, proto, type AnyMessageContent, type CacheStore, type WASocket, type WAMessage, type WAMessageKey } from '@whiskeysockets/baileys';
 import { Logger } from '@nestjs/common';
 import { type Connection, Types } from 'mongoose';
 import { type ProviderAccount, type ProviderCapability, type ProviderEvent, type ProviderSession, type ProviderMessageKey, type ProviderSendRequest, type HistorySyncTarget, type NormalizedInboundMessage, BAILEYS_CAPABILITIES, type WhatsAppProvider } from '@hala/shared';
@@ -135,7 +135,8 @@ export class BaileysProvider implements WhatsAppProvider {
       },
       shouldSyncHistoryMessage: message => {
         if (message.mediaKey && message.directPath) {
-          void this.importHistoryMappings(message, account, emit).catch(() => this.logger.warn('History phone mapping import failed'));
+          void this.importHistoryMappings(message, account, emit, socket?.user?.id ?? state.creds.me?.id)
+            .catch(() => this.logger.warn('History phone mapping import failed'));
         }
         return true;
       }
@@ -191,31 +192,8 @@ export class BaileysProvider implements WhatsAppProvider {
     socket.ev.on('messaging-history.set', history => {
       this.logger.log(`WhatsApp history sync returned ${history.messages.length} messages`);
       this.initialHistory.historyReceived(account.id, history.messages.length);
-      void (async () => {
-        for (const message of history.messages) {
-          if (message.key.id && message.message) {
-            this.cacheMessage(account.id, message.key.id, message.message);
-          }
-        }
-        for (const chat of history.chats) {
-          const contact = contactFromChat(chat);
-          if (contact) await emit({ type: 'wa.contact', accountId: account.id, tenantId: account.tenantId, contact });
-          const readState = chatReadStateFromUpdate(chat);
-          if (readState) {
-            await emit({ type: 'wa.chat.read_state', accountId: account.id, tenantId: account.tenantId, ...readState });
-          }
-        }
-        for (const contact of history.contacts) {
-          if (contact.id) await emit({ type: 'wa.contact', accountId: account.id, tenantId: account.tenantId,
-            contact: { id: contact.id, lid: contact.lid, jid: contact.jid, name: contact.name, notify: contact.notify } });
-        }
-        for (const message of history.messages) this.rememberPoll(account.id, message, socket.user?.id);
-        for (const message of history.messages) {
-          const normalized = this.normalizeMessage(account.id, account.tenantId, message, socket.user?.id);
-          if (normalized) await emit({ type: 'wa.message.in', accountId: account.id, tenantId: account.tenantId,
-            message: { ...normalized, history: true } });
-        }
-      })().catch(() => this.logger.error('History import failed'));
+      void this.processHistoryData(history, account, emit, socket.user?.id)
+        .catch(() => this.logger.error('History import failed'));
     });
     socket.ev.on('contacts.upsert', contacts => { for (const contact of contacts) publishContact(contact); });
     socket.ev.on('contacts.update', contacts => { for (const contact of contacts) publishContact(contact); });
@@ -355,13 +333,68 @@ export class BaileysProvider implements WhatsAppProvider {
     for (const key of this.polls.keys()) if (key.startsWith(`${accountId}:`)) this.polls.delete(key);
   }
 
-  private async importHistoryMappings(notification: proto.Message.IHistorySyncNotification, account: ProviderAccount,
-    emit: (event: ProviderEvent) => Promise<void>): Promise<void> {
+  private async processHistoryData(
+    history: { chats: proto.IConversation[]; contacts: { id: string; name?: string; notify?: string; verifiedName?: string; lid?: string; jid?: string }[]; messages: proto.IWebMessageInfo[] },
+    account: ProviderAccount,
+    emit: (event: ProviderEvent) => Promise<void>,
+    ownJid?: string
+  ): Promise<void> {
+    for (const message of history.messages) {
+      if (message.key.id && message.message) {
+        this.cacheMessage(account.id, message.key.id, message.message);
+        void this.saveRawMessageToDb(account.id, message.key.id, message.message);
+      }
+    }
+    for (const chat of history.chats) {
+      const contact = contactFromChat(chat);
+      if (contact) await emit({ type: 'wa.contact', accountId: account.id, tenantId: account.tenantId, contact });
+      const readState = chatReadStateFromUpdate(chat);
+      if (readState) {
+        await emit({ type: 'wa.chat.read_state', accountId: account.id, tenantId: account.tenantId, ...readState });
+      }
+    }
+    for (const contact of history.contacts) {
+      if (contact.id) {
+        await emit({
+          type: 'wa.contact',
+          accountId: account.id,
+          tenantId: account.tenantId,
+          contact: { id: contact.id, lid: contact.lid, jid: contact.jid, name: contact.name, notify: contact.notify }
+        });
+      }
+    }
+    for (const message of history.messages) this.rememberPoll(account.id, message, ownJid);
+    for (const message of history.messages) {
+      const normalized = this.normalizeMessage(account.id, account.tenantId, message, ownJid);
+      if (normalized) {
+        await emit({
+          type: 'wa.message.in',
+          accountId: account.id,
+          tenantId: account.tenantId,
+          message: { ...normalized, history: true }
+        });
+      }
+    }
+  }
+
+  private async importHistoryMappings(
+    notification: proto.Message.IHistorySyncNotification,
+    account: ProviderAccount,
+    emit: (event: ProviderEvent) => Promise<void>,
+    ownJid?: string
+  ): Promise<void> {
     const history = await downloadHistory(notification, {});
     const contacts = contactsFromHistoryMappings(history.phoneNumberToLidMappings ?? []);
     this.logger.log(`WhatsApp history supplied ${contacts.length} phone mappings`);
     for (const contact of contacts) {
       await emit({ type: 'wa.contact', accountId: account.id, tenantId: account.tenantId, contact });
+    }
+    try {
+      const processed = processHistoryMessage(history);
+      this.logger.log(`Direct history processing extracted ${processed.chats.length} chats and ${processed.messages.length} messages`);
+      await this.processHistoryData(processed, account, emit, ownJid);
+    } catch (error) {
+      this.logger.warn(`Direct history processing failed: ${(error as Error).message}`);
     }
   }
 
