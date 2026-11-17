@@ -118,8 +118,8 @@ export class BaileysProvider implements WhatsAppProvider {
 
   async open(account: ProviderAccount, fencingToken: number, emit: (event: ProviderEvent) => Promise<void>): Promise<ProviderSession> {
     const { state, saveCreds } = await this.auth.load(account, fencingToken);
-    const syncFullHistory = this.initialHistory.useFullHistory(account.id, Boolean(state.creds.me || state.creds.account));
-    if (syncFullHistory) this.logger.log(`Requesting initial WhatsApp history for account ${account.id}`);
+    this.initialHistory.useFullHistory(account.id, Boolean(state.creds.me || state.creds.account));
+    this.logger.log(`Requesting initial WhatsApp history for account ${account.id}`);
     const socket = makeWASocket({
       auth: {
         creds: state.creds,
@@ -127,18 +127,17 @@ export class BaileysProvider implements WhatsAppProvider {
       },
       browser: Browsers.ubuntu('Hala CRM'),
       printQRInTerminal: false,
-      syncFullHistory,
+      syncFullHistory: true,
       msgRetryCounterCache: this.getRetryCache(account.id),
       getMessage: async (key: proto.IMessageKey) => {
         if (!key.id) return undefined;
         return this.getMessage(account.id, key.id);
       },
       shouldSyncHistoryMessage: message => {
-        const shouldSync = syncFullHistory || message.syncType === proto.HistorySync.HistorySyncType.ON_DEMAND;
-        if (shouldSync && message.mediaKey && message.directPath) {
+        if (message.mediaKey && message.directPath) {
           void this.importHistoryMappings(message, account, emit).catch(() => this.logger.warn('History phone mapping import failed'));
         }
-        return shouldSync;
+        return true;
       }
     });
     this.sockets.set(account.id, socket);
