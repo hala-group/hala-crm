@@ -58,7 +58,7 @@ export class InboundProcessor {
       for (const conversation of conversations) {
         await this.deps.publish({ type: 'conversation.updated', tenantId: event.tenantId, accountId: event.accountId,
           conversation: { _id: conversation._id.toString(), tenantId: event.tenantId, accountId: event.accountId,
-            contactId: item._id.toString(), contactName: contactDisplayName({ ...item, ...fields, isGroup: Boolean(item['isGroup'] || isGroup) }),
+            contactId: item._id.toString(), contactName: contactDisplayName({ ...item, ...fields, isGroup: Boolean(item['isGroup'] || isGroup), isSelf: Boolean(item['isSelf'] || (fields as Record<string, unknown>)['isSelf']) }),
             contactWaId: item['waId'] as string, status: conversation['status'] as 'open' | 'archived',
             assignedUserId: conversation['assignedUserId']?.toString() ?? null,
             lastMessageAt: (conversation['lastMessageAt'] as Date).toISOString(),
@@ -117,7 +117,7 @@ export class InboundProcessor {
       conversation: { _id: refreshed._id.toString(), tenantId: event.tenantId, accountId: event.accountId,
         contactId: contact._id.toString(), contactName: contactDisplayName({ displayName: contact['displayName'] as string | undefined,
           pushName: contact['pushName'] as string | undefined, phoneE164: contact['phoneE164'] as string | undefined,
-          waId: contact['waId'] as string, isGroup: Boolean(contact['isGroup']) }),
+          waId: contact['waId'] as string, isGroup: Boolean(contact['isGroup']), isSelf: Boolean(contact['isSelf']) }),
         contactWaId: contact['waId'] as string, ...(contact['phoneE164'] ? { contactPhoneE164: contact['phoneE164'] as string } : {}),
         contactAbout: refreshed['contactAbout'] as string | null | undefined,
         commonGroups: (refreshed['commonGroups'] as { id: string; name: string }[] | undefined) ?? [],
@@ -168,10 +168,12 @@ export class InboundProcessor {
     const now = new Date();
     const lidOwner = data.lid ? await contacts.findOne({ tenantId, lid: data.lid }) : null;
     const contactFilter = lidOwner ? { tenantId, _id: lidOwner._id } : { tenantId, waId: data.waId };
+    const isSelfContact = Boolean(data.isSelf || lidOwner?.['isSelf']);
     await contacts.updateOne(contactFilter, { $set: {
       ...(!data.isGroup && data.pushName?.trim() ? { pushName: data.pushName.trim() } : {}),
       ...(data.lid && (!lidOwner || lidOwner['waId'] === data.waId) ? { lid: data.lid } : {}),
       ...(data.phoneE164 ? { phoneE164: data.phoneE164 } : {}),
+      ...(isSelfContact ? { isSelf: true, displayName: 'أنت (رسائل شخصية)', pushName: 'أنت' } : {}),
       updatedAt: now
     },
     $setOnInsert: { createdAt: now, isGroup: data.isGroup, tags: [], customFields: {} } }, { upsert: true });
@@ -259,7 +261,8 @@ export class InboundProcessor {
       if (visibleMessage) await this.deps.publish({ type: 'conversation.updated', tenantId: data.tenantId, accountId: data.accountId,
         conversation: { _id: conversation._id.toString(), tenantId: data.tenantId, accountId: data.accountId,
           contactId: contact._id.toString(), contactName: contactDisplayName({ displayName: contact['displayName'],
-            pushName: contact['pushName'], phoneE164: contact['phoneE164'], waId: data.waId, isGroup: data.isGroup }),
+            pushName: contact['pushName'], phoneE164: contact['phoneE164'], waId: data.waId, isGroup: data.isGroup,
+            isSelf: Boolean(data.isSelf || contact['isSelf']) }),
           contactWaId: data.waId, status: latest?.['status'] ?? 'open', assignedUserId,
           tags: contact['tags'] ?? [],
           lastMessageAt: latest?.['lastMessageAt']?.toISOString() ?? data.timestamp.toISOString(),

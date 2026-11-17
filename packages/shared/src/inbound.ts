@@ -61,7 +61,7 @@ export const normalizedInboundSchema = z.object({
   tenantId: objectIdSchema, accountId: objectIdSchema,
   waMessageId: z.string().min(1),
   waId: z.string().min(1), lid: z.string().optional(), phoneE164: z.string().optional(),
-  pushName: z.string().optional(), isGroup: z.boolean().default(false),
+  pushName: z.string().optional(), isGroup: z.boolean().default(false), isSelf: z.boolean().optional(),
   direction: z.enum(['in', 'out']), type: messageTypeSchema,
   history: z.boolean().optional(),
   timestamp: z.coerce.date(),

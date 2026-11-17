@@ -5,6 +5,7 @@ import { tenantPlugin } from '../../common/tenant.plugin.js';
 export interface ContactRecord {
   tenantId: Types.ObjectId; waId: string; lid?: string; phoneE164?: string;
   displayName?: string; pushName?: string; avatarUrl?: string; isGroup: boolean;
+  isSelf?: boolean;
   tags: string[]; customFields: Record<string, unknown>; ownerUserId?: Types.ObjectId; lifecycleStage?: string;
   createdAt: Date; updatedAt: Date;
 }
@@ -57,6 +58,7 @@ export const contactSchema = new Schema<ContactRecord>({
   waId: { type: String, required: true }, lid: String, phoneE164: String,
   displayName: String, pushName: String, avatarUrl: String,
   isGroup: { type: Boolean, default: false },
+  isSelf: { type: Boolean, default: false },
   tags: { type: [String], default: [] }, customFields: { type: Schema.Types.Mixed, default: {} },
   ownerUserId: Schema.Types.ObjectId, lifecycleStage: String
 }, { collection: 'contacts', timestamps: true });

@@ -4,6 +4,7 @@ export interface ContactDisplayInput {
   phoneE164?: string | null;
   waId?: string | null;
   isGroup?: boolean | null;
+  isSelf?: boolean | null;
 }
 
 export function contactPhoneNumber(waId: string | null | undefined): string | null {
@@ -12,6 +13,7 @@ export function contactPhoneNumber(waId: string | null | undefined): string | nu
 }
 
 export function contactDisplayName(contact: ContactDisplayInput): string {
+  if (contact.isSelf) return 'أنت (رسائل شخصية)';
   for (const candidate of [contact.displayName, contact.pushName]) {
     const name = candidate?.trim();
     if (name && !/^[.\u2026]+$/u.test(name)) return name;

@@ -54,7 +54,7 @@ export class InboxService {
       tenantId: record.tenantId.toString(), accountId: record.accountId.toString()
     }));
     return { _id: record._id.toString(), tenantId: record.tenantId.toString(), accountId: record.accountId.toString(),
-      contactId: record.contactId.toString(), contactName: contactDisplayName(contact ?? {}),
+      contactId: record.contactId.toString(), contactName: contactDisplayName(contact ? { ...contact, isSelf: Boolean(contact.isSelf || contact.displayName === 'أنت (رسائل شخصية)') } : {}),
       contactWaId: contact?.waId ?? '', contactPhoneE164: contact?.phoneE164,
       contactAbout: record.contactAbout, commonGroups: [],
       profileStatus: record.profileStatus, profileCheckedAt: record.profileCheckedAt?.toISOString(),
@@ -410,7 +410,7 @@ export class InboxService {
           mediaId: record.mediaId?.toString(),
           status: record.status
         },
-        contactName: contactDisplayName(contact ?? {}),
+        contactName: contactDisplayName(contact ? { ...contact, isSelf: Boolean(contact.isSelf || contact.displayName === 'أنت (رسائل شخصية)') } : {}),
         contactWaId: contact?.waId ?? '',
         contactPhoneE164: contact?.phoneE164
       };

@@ -309,7 +309,7 @@ export class BaileysProvider implements WhatsAppProvider {
   }
 
   private normalizeMessage(accountId: string, tenantId: string, message: WAMessage, ownJid?: string) {
-    const normalized = normalizeBaileysMessage(accountId, tenantId, message);
+    const normalized = normalizeBaileysMessage(accountId, tenantId, message, ownJid);
     const content = extractMessageContent(message.message) ?? message.message;
     const update = content?.pollUpdateMessage;
     const pollId = update?.pollCreationMessageKey?.id;
@@ -426,13 +426,15 @@ export class BaileysProvider implements WhatsAppProvider {
       const jid = [c.jid, c.id].find(id => id?.endsWith('@s.whatsapp.net'));
       const waId = isGroup ? c.id : (lid ?? jid ?? c.id);
       if (!waId) continue;
-      const name = c.name?.trim() || (c as { verifiedName?: string }).verifiedName?.trim();
-      const notify = (c as { notify?: string }).notify?.trim();
+      const isSelf = Boolean(ownJid && (areJidsSameUser(waId, ownJid) || (lid && areJidsSameUser(lid, ownJid)) || (jid && areJidsSameUser(jid, ownJid))));
+      const name = isSelf ? 'أنت (رسائل شخصية)' : (c.name?.trim() || (c as { verifiedName?: string }).verifiedName?.trim());
+      const notify = isSelf ? 'أنت' : (c as { notify?: string }).notify?.trim();
       const phone = jid?.match(/^([1-9][0-9]{5,15})@s\.whatsapp\.net$/);
       const fields = {
         ...(name ? { displayName: name } : {}),
         ...(notify && !isGroup ? { pushName: notify } : {}),
         ...(phone ? { phoneE164: `+${phone[1]}` } : {}),
+        ...(isSelf ? { isSelf: true } : {}),
         updatedAt: now
       };
       await contactsColl.updateOne(
@@ -448,6 +450,38 @@ export class BaileysProvider implements WhatsAppProvider {
     for (const c of allContacts) {
       if (typeof c['waId'] === 'string') contactByWaId.set(c['waId'], c);
       if (typeof c['lid'] === 'string') contactByWaId.set(c['lid'], c);
+    }
+
+    // 2.5. Ensure all chats in history.chats have conversations created
+    for (const chat of history.chats) {
+      if (!chat.id) continue;
+      const isGroup = chat.id.endsWith('@g.us');
+      const lid = [chat.lidJid, chat.id].find(id => id?.endsWith('@lid'));
+      const jid = [chat.pnJid, chat.id].find(id => id?.endsWith('@s.whatsapp.net'));
+      const waId = isGroup ? chat.id : (lid ?? jid ?? chat.id);
+      if (!waId) continue;
+      const contact = contactByWaId.get(waId) ?? (lid ? contactByWaId.get(lid) : undefined) ?? (jid ? contactByWaId.get(jid) : undefined);
+      if (!contact) continue;
+
+      const contactId = contact['_id'] as Types.ObjectId;
+      const conversationFilter = { tenantId, accountId, contactId };
+      const chatTimestamp = chat.conversationTimestamp
+        ? new Date(Number(chat.conversationTimestamp) * 1000)
+        : now;
+      const unread = Number(chat.unreadCount ?? 0);
+
+      await convsColl.updateOne(conversationFilter, {
+        $setOnInsert: {
+          status: 'open',
+          unreadCount: Math.max(unread, 0),
+          lastMessageAt: chatTimestamp,
+          lastMessagePreview: '',
+          lastMessageType: 'text',
+          lastMessageDirection: 'in',
+          createdAt: now,
+          updatedAt: now
+        }
+      }, { upsert: true });
     }
 
     // 3. Process messages into conversations and messages collections
@@ -466,6 +500,7 @@ export class BaileysProvider implements WhatsAppProvider {
             $set: {
               ...(normalized.pushName ? { pushName: normalized.pushName } : {}),
               ...(normalized.phoneE164 ? { phoneE164: normalized.phoneE164 } : {}),
+              ...(normalized.isSelf ? { isSelf: true, displayName: 'أنت (رسائل شخصية)' } : {}),
               updatedAt: now
             },
             $setOnInsert: { createdAt: now, isGroup, tags: [], customFields: {} }
@@ -485,6 +520,7 @@ export class BaileysProvider implements WhatsAppProvider {
       const conversationFilter = { tenantId, accountId, contactId };
       const preview = normalized.text?.trim() || normalized.caption?.trim() || '';
       const visibleMessage = normalized.type !== 'system' && normalized.type !== 'reaction';
+      const initialMessageType = normalized.type === 'system' ? 'text' : normalized.type;
 
       await convsColl.updateOne(conversationFilter, {
         $setOnInsert: {
@@ -492,7 +528,7 @@ export class BaileysProvider implements WhatsAppProvider {
           unreadCount: 0,
           lastMessageAt: normalized.timestamp,
           lastMessagePreview: preview,
-          lastMessageType: normalized.type,
+          lastMessageType: initialMessageType,
           lastMessageDirection: normalized.direction,
           createdAt: now,
           updatedAt: now

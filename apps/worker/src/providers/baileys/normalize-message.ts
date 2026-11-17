@@ -1,4 +1,4 @@
-import { extractMessageContent, getContentType, proto, type WAMessage, type DownloadableMessage } from '@whiskeysockets/baileys';
+import { areJidsSameUser, extractMessageContent, getContentType, proto, type WAMessage, type DownloadableMessage } from '@whiskeysockets/baileys';
 import { type MediaSource, type NormalizedInboundMessage, type MessageType } from '@hala/shared';
 
 type MediaFields = DownloadableMessage & {
@@ -52,7 +52,7 @@ function contactCard(contact: proto.Message.IContactMessage): { name: string; ph
   };
 }
 
-export function normalizeBaileysMessage(accountId: string, tenantId: string, message: WAMessage): NormalizedInboundMessage | null {
+export function normalizeBaileysMessage(accountId: string, tenantId: string, message: WAMessage, ownJid?: string): NormalizedInboundMessage | null {
   const remoteJid = message.key.remoteJid ?? undefined;
   const waMessageId = message.key.id ?? undefined;
   if (!remoteJid || !waMessageId) return null;
@@ -60,6 +60,7 @@ export function normalizeBaileysMessage(accountId: string, tenantId: string, mes
   if (typeof message.messageStubType === 'number' && ignoredTransportStubs.has(message.messageStubType)) return null;
   const isGroup = remoteJid.endsWith('@g.us');
   const isLid = remoteJid.endsWith('@lid');
+  const isSelf = Boolean(ownJid && areJidsSameUser(remoteJid, ownJid));
   // senderPn identifies the sender; on outgoing messages that is our own number.
   const pnJid = !isGroup && isLid && !message.key.fromMe ? message.key.senderPn : undefined;
   const waId = pnJid || remoteJid;
@@ -71,7 +72,9 @@ export function normalizeBaileysMessage(accountId: string, tenantId: string, mes
   const normalized: NormalizedInboundMessage = {
     accountId, tenantId, waMessageId, waId, lid,
     phoneE164: phoneFromJid(pnJid || remoteJid),
-    pushName: message.pushName ?? undefined, isGroup,
+    pushName: isSelf ? 'أنت' : (message.pushName ?? undefined),
+    isGroup,
+    isSelf: isSelf || undefined,
     direction: message.key.fromMe ? 'out' : 'in', type: 'unknown',
     timestamp: new Date((seconds > 0 ? seconds : Date.now() / 1000) * 1000),
     raw: { remoteJid, participant: message.key.participant ?? undefined, messageType, stubType: message.messageStubType ?? undefined, protocolType: content.protocolMessage?.type ?? undefined }

@@ -17,11 +17,11 @@ import { CallAlertsStore } from '../core/call-alerts.store';
           <strong>Hala CRM</strong>
         </a>
         <nav>
-          <a routerLink="/users" routerLinkActive="active" *halaHasPermission="'users:read'">المستخدمون</a>
-          <a routerLink="/accounts" routerLinkActive="active" *halaHasPermission="'accounts:create'">الأرقام</a>
           @if (permissions.can('conversations:read') || permissions.can('conversations:read_all')) {
             <a routerLink="/inbox" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: false }">المحادثات</a>
           }
+          <a routerLink="/users" routerLinkActive="active" *halaHasPermission="'users:read'">المستخدمون</a>
+          <a routerLink="/accounts" routerLinkActive="active" *halaHasPermission="'accounts:create'">الأرقام</a>
           <a routerLink="/calls" routerLinkActive="active" *halaHasPermission="'calls:read'">المكالمات</a>
         </nav>
         <div class="user-nav">

@@ -10,6 +10,7 @@ describe('contact display name', () => {
 
   it('does not expose a raw LID or broadcast identifier as a title', () => {
     expect(contactDisplayName({ waId: 'lid@71722363576571' })).toBe('رقم غير متاح · معرّف 6571');
+    expect(contactDisplayName({ isSelf: true, waId: 'lid@71722363576571' })).toBe('أنت (رسائل شخصية)');
     expect(contactDisplayName({ waId: 'status@broadcast' })).toBe('حالات واتساب');
   });
 
