@@ -151,6 +151,7 @@ export class BaileysProvider implements WhatsAppProvider {
     socket.ev.on('connection.update', update => {
       if (update.qr) notify({ type: 'wa.qr', accountId: account.id, tenantId: account.tenantId, qr: update.qr });
       if (update.connection === 'open') {
+        const isFirstPairing = !state.creds.me;
         notify({ type: 'wa.connection', accountId: account.id, tenantId: account.tenantId, status: 'connected', phoneNumber: socket.user?.id });
         void (async () => {
           try {
@@ -164,6 +165,20 @@ export class BaileysProvider implements WhatsAppProvider {
             this.logger.warn('Failed to fetch participating groups on connect');
           }
         })();
+        // On first QR pairing, creds.me.lid is empty when HISTORY_SYNC_NOTIFICATION arrives,
+        // causing Baileys to drop it as "spoofed". After connection opens, creds.me.lid is saved.
+        // We schedule a reconnect so the next connection attempt has creds.me.lid populated,
+        // allowing the history notification to pass the security check.
+        if (isFirstPairing) {
+          this.logger.log(`First QR pairing detected for account ${account.id} — scheduling reconnect to receive full history`);
+          this.initialHistory.markNeedsReconnect(account.id);
+          setTimeout(() => {
+            if (this.initialHistory.consumeNeedsReconnect(account.id)) {
+              this.logger.log(`Reconnecting account ${account.id} to trigger history sync with populated LID`);
+              socket.end(undefined);
+            }
+          }, 35_000);
+        }
       }
       if (update.connection === 'close') {
         const code = (update.lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode;
