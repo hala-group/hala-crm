@@ -1,0 +1,10 @@
+<?php
+declare(strict_types=1);
+
+return [
+    // Generate a different random secret and configure the same value in Hala's HOSTINGER_STORAGE_API_KEY.
+    'api_key' => 'replace-this-with-a-random-secret-of-at-least-32-characters',
+    // The default is a sibling of public_html, outside the web root.
+    'storage_root' => dirname(__DIR__, 2) . '/hala-private-storage',
+    'max_bytes' => 104857600
+];

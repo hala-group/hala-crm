@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.angular/
+coverage/
+.tmp/
+.env
+storage/
+deploy/hostinger-api/api/config.php
+*.tsbuildinfo
+.pnpm-store/
+test-results/
+

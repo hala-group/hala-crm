@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "types": [],
+    "outDir": "./out-tsc/app",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": false
+  },
+  "angularCompilerOptions": {"strictTemplates": true, "strictInjectionParameters": true},
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.spec.ts"]
+}

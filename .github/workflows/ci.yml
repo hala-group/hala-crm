@@ -1,0 +1,64 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      REDIS_TEST_URL: redis://127.0.0.1:6379
+      HALA_TESTCONTAINERS: '1'
+    services:
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint && pnpm typecheck && pnpm test && pnpm build
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install chromium --with-deps
+      - name: Configure isolated test stack
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const crypto = require('node:crypto');
+          fs.writeFileSync('.env', [
+            'NODE_ENV=test', 'API_PORT=3000',
+            'JWT_ACCESS_SECRET=phase6-e2e-access-secret-that-is-long-enough',
+            'JWT_REFRESH_SECRET=phase6-e2e-refresh-secret-that-is-long-enough',
+            `ENCRYPTION_KEY_BASE64=${crypto.randomBytes(32).toString('base64')}`,
+            'BOOTSTRAP_TENANT_SLUG=e2e-company', 'BOOTSTRAP_TENANT_NAME=E2E Company',
+            'BOOTSTRAP_OWNER_EMAIL=owner@e2e.test', 'BOOTSTRAP_OWNER_PASSWORD=e2e-password-123',
+            'CORS_ORIGINS=http://localhost:8080', 'PUBLIC_ORIGIN=http://localhost:8080'
+          ].join('\n') + '\n');
+          NODE
+      - run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d --build --wait
+      - run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml run --rm api node apps/api/dist/seed.js
+      - run: pnpm test:e2e
+      - if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml down -v

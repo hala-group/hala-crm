@@ -1,0 +1,27 @@
+{
+  "name": "hala-crm",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "dev": "pnpm --filter @hala/shared build && docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d mongo redis && concurrently -k -n api,worker,web \"pnpm --filter @hala/api dev\" \"pnpm --filter @hala/worker dev\" \"pnpm --filter @hala/web dev\"",
+    "seed": "pnpm --filter @hala/shared build && pnpm --filter @hala/api seed",
+    "lint": "oxlint apps packages",
+    "typecheck": "pnpm --filter @hala/shared build && pnpm -r --if-present typecheck",
+    "test": "pnpm -r --workspace-concurrency=1 --if-present test",
+    "test:e2e": "playwright test",
+    "build": "pnpm -r --if-present build",
+    "format": "prettier --write .",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0",
+    "concurrently": "latest",
+    "husky": "latest",
+    "oxlint": "latest",
+    "prettier": "latest",
+    "testcontainers": "12.2.1",
+    "typescript": "~6.0.0",
+    "vitest": "5.0.5"
+  }
+}

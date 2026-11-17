@@ -1,0 +1,6 @@
+services:
+  worker:
+    environment:
+      NODE_ENV: test
+      WA_PROVIDER_MODE: fake
+      MAX_SESSIONS_PER_WORKER: "10"
