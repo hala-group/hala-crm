@@ -157,13 +157,19 @@ export function normalizeBaileysMessage(accountId: string, tenantId: string, mes
     };
   } else if (content.protocolMessage || message.messageStubType != null) {
     const protocol = content.protocolMessage;
-    if (
-      protocol?.type === proto.Message.ProtocolMessage.Type.HISTORY_SYNC_NOTIFICATION ||
-      protocol?.type === proto.Message.ProtocolMessage.Type.APP_STATE_SYNC_KEY_SHARE ||
-      protocol?.type === proto.Message.ProtocolMessage.Type.PEER_DATA_OPERATION_REQUEST_MESSAGE ||
-      protocol?.type === proto.Message.ProtocolMessage.Type.PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE ||
-      protocol?.type === proto.Message.ProtocolMessage.Type.INITIAL_SECURITY_NOTIFICATION_SETTING_SYNC
-    ) {
+    const protocolType: unknown = protocol?.type;
+    const isHistoryOrInternal =
+      protocolType === proto.Message.ProtocolMessage.Type.HISTORY_SYNC_NOTIFICATION ||
+      protocolType === proto.Message.ProtocolMessage.Type.APP_STATE_SYNC_KEY_SHARE ||
+      protocolType === proto.Message.ProtocolMessage.Type.PEER_DATA_OPERATION_REQUEST_MESSAGE ||
+      protocolType === proto.Message.ProtocolMessage.Type.PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE ||
+      protocolType === proto.Message.ProtocolMessage.Type.INITIAL_SECURITY_NOTIFICATION_SETTING_SYNC ||
+      protocolType === 'HISTORY_SYNC_NOTIFICATION' ||
+      protocolType === 'APP_STATE_SYNC_KEY_SHARE' ||
+      protocolType === 'PEER_DATA_OPERATION_REQUEST_MESSAGE' ||
+      protocolType === 'PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE' ||
+      protocolType === 'INITIAL_SECURITY_NOTIFICATION_SETTING_SYNC';
+    if (isHistoryOrInternal) {
       return null;
     }
     const targetWaMessageId = protocol?.key?.id;

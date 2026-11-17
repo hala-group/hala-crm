@@ -80,8 +80,16 @@ export class WorkerRuntimeService implements OnModuleInit, OnModuleDestroy {
     this.manager = new SessionManager(leases, repository, providers,
       { publish: async event => {
         if (event.type === 'wa.message.in') {
-          const jobId = createHash('sha256').update(`${event.tenantId}/${event.accountId}/${event.message.waMessageId}`).digest('hex');
-          await this.inboundQueue!.add('message', event.message, { jobId, attempts: 5, backoff: { type: 'exponential', delay: 1000 }, removeOnComplete: true });
+          if (event.message.history) {
+            try {
+              await processor.process(event.message);
+            } catch (err) {
+              this.logger.error(`Failed to process history message ${event.message.waMessageId}: ${(err as Error).message}`);
+            }
+          } else {
+            const jobId = createHash('sha256').update(`${event.tenantId}/${event.accountId}/${event.message.waMessageId}`).digest('hex');
+            await this.inboundQueue!.add('message', event.message, { jobId, attempts: 5, backoff: { type: 'exponential', delay: 1000 }, removeOnComplete: true });
+          }
         } else if (event.type === 'wa.contact') {
           await processor.syncContact(event);
         } else if (event.type === 'wa.chat.read_state') {

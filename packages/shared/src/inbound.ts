@@ -73,7 +73,13 @@ export const normalizedInboundSchema = z.object({
   reaction: z.object({ targetWaMessageId: z.string(), emoji: z.string() }).optional(),
   mutation: messageMutationSchema.optional(),
   quotedWaMessageId: z.string().optional(), mentions: z.array(z.string()).optional(), forwarded: z.boolean().optional(),
-  raw: z.object({ remoteJid: z.string().optional(), participant: z.string().optional(), messageType: z.string().optional(), protocolType: z.number().optional(), stubType: z.number().optional() }).optional(),
+  raw: z.object({
+    remoteJid: z.string().optional(),
+    participant: z.string().optional(),
+    messageType: z.string().optional(),
+    protocolType: z.union([z.number(), z.string()]).optional(),
+    stubType: z.number().optional()
+  }).optional(),
   mediaSource: mediaSourceSchema.optional()
 });
 export type NormalizedInboundMessage = z.infer<typeof normalizedInboundSchema>;

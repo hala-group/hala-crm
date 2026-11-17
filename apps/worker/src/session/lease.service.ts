@@ -51,12 +51,30 @@ export class RedisLeaseBackend implements LeaseBackend {
 }
 
 export class LeaseService {
+  private readonly cachedAssert = new Map<string, { current: Lease | null; expiresAt: number }>();
+
   constructor(private readonly backend: LeaseBackend, readonly workerId: string, private readonly ttlMs: number) {}
-  acquire(id: string): Promise<Lease | null> { return this.backend.acquire(id, this.workerId, this.ttlMs); }
+  acquire(id: string): Promise<Lease | null> {
+    this.cachedAssert.delete(id);
+    return this.backend.acquire(id, this.workerId, this.ttlMs);
+  }
   renew(lease: Lease): Promise<boolean> { return this.backend.renew(lease, this.ttlMs); }
-  release(lease: Lease): Promise<boolean> { return this.backend.release(lease); }
+  release(lease: Lease): Promise<boolean> {
+    this.cachedAssert.delete(lease.accountId);
+    return this.backend.release(lease);
+  }
   async assertOwned(lease: Lease): Promise<void> {
-    const current = await this.backend.current(lease.accountId);
-    if (!current || current.workerId !== lease.workerId || current.fencingToken !== lease.fencingToken) throw new Error('STALE_SESSION_FENCE');
+    const now = Date.now();
+    let entry = this.cachedAssert.get(lease.accountId);
+    if (!entry || entry.expiresAt <= now) {
+      const current = await this.backend.current(lease.accountId);
+      entry = { current, expiresAt: now + 1000 };
+      this.cachedAssert.set(lease.accountId, entry);
+    }
+    const current = entry.current;
+    if (!current || current.workerId !== lease.workerId || current.fencingToken !== lease.fencingToken) {
+      this.cachedAssert.delete(lease.accountId);
+      throw new Error('STALE_SESSION_FENCE');
+    }
   }
 }
