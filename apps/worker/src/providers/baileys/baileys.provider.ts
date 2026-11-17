@@ -167,9 +167,15 @@ export class BaileysProvider implements WhatsAppProvider {
       }
       if (update.connection === 'close') {
         const code = (update.lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode;
-        if (code === DisconnectReason.loggedOut) this.initialHistory.clear(account.id);
-        notify({ type: 'wa.connection', accountId: account.id, tenantId: account.tenantId,
-          status: code === DisconnectReason.loggedOut ? 'logged_out' : 'disconnected' });
+        this.logger.log(`WhatsApp connection closed for account ${account.id} with status code ${code}`);
+        if (code === DisconnectReason.loggedOut) {
+          this.initialHistory.clear(account.id);
+          notify({ type: 'wa.connection', accountId: account.id, tenantId: account.tenantId, status: 'logged_out' });
+        } else if (code === DisconnectReason.restartRequired) {
+          this.logger.log(`WhatsApp restart required (515) for account ${account.id} — keeping session active for reconnect`);
+        } else {
+          notify({ type: 'wa.connection', accountId: account.id, tenantId: account.tenantId, status: 'disconnected' });
+        }
       }
     });
     socket.ev.on('messages.upsert', update => {
@@ -345,6 +351,15 @@ export class BaileysProvider implements WhatsAppProvider {
         void this.saveRawMessageToDb(account.id, message.key.id, message.message);
       }
     }
+    // Persist directly to MongoDB to ensure data safety regardless of Redis/WebSocket state
+    if (this.connection?.db) {
+      try {
+        await this.persistHistoryToDb(history, account, ownJid);
+      } catch (error) {
+        this.logger.error(`Direct DB history persistence error: ${(error as Error).message}`);
+      }
+    }
+
     for (const chat of history.chats) {
       const contact = contactFromChat(chat);
       if (contact) await emit({ type: 'wa.contact', accountId: account.id, tenantId: account.tenantId, contact });
@@ -375,6 +390,148 @@ export class BaileysProvider implements WhatsAppProvider {
         });
       }
     }
+  }
+
+  private async persistHistoryToDb(
+    history: { chats: proto.IConversation[]; contacts: { id: string; name?: string; notify?: string; verifiedName?: string; lid?: string; jid?: string }[]; messages: proto.IWebMessageInfo[] },
+    account: ProviderAccount,
+    ownJid?: string
+  ): Promise<void> {
+    if (!this.connection?.db) return;
+    const db = this.connection.db;
+    const tenantId = new Types.ObjectId(account.tenantId);
+    const accountId = new Types.ObjectId(account.id);
+    const now = new Date();
+
+    const contactsColl = db.collection('contacts');
+    const convsColl = db.collection('conversations');
+    const msgsColl = db.collection('messages');
+
+    // 1. Process contacts from history.contacts and history.chats
+    const contactEntries = [
+      ...history.contacts,
+      ...history.chats.map(chat => ({
+        id: chat.id ?? '',
+        name: chat.name ?? undefined,
+        lid: chat.lidJid ?? undefined,
+        jid: chat.pnJid ?? undefined
+      }))
+    ];
+
+    for (const c of contactEntries) {
+      if (!c.id) continue;
+      const isGroup = c.id.endsWith('@g.us');
+      const lid = [c.lid, c.id].find(id => id?.endsWith('@lid'));
+      const jid = [c.jid, c.id].find(id => id?.endsWith('@s.whatsapp.net'));
+      const waId = isGroup ? c.id : (lid ?? jid ?? c.id);
+      if (!waId) continue;
+      const name = c.name?.trim() || (c as { verifiedName?: string }).verifiedName?.trim();
+      const notify = (c as { notify?: string }).notify?.trim();
+      const phone = jid?.match(/^([1-9][0-9]{5,15})@s\.whatsapp\.net$/);
+      const fields = {
+        ...(name ? { displayName: name } : {}),
+        ...(notify && !isGroup ? { pushName: notify } : {}),
+        ...(phone ? { phoneE164: `+${phone[1]}` } : {}),
+        updatedAt: now
+      };
+      await contactsColl.updateOne(
+        { tenantId, waId },
+        { $set: fields, $setOnInsert: { createdAt: now, isGroup, tags: [], customFields: {} } },
+        { upsert: true }
+      );
+    }
+
+    // 2. Fetch contacts for lookup
+    const allContacts = await contactsColl.find({ tenantId }).toArray();
+    const contactByWaId = new Map<string, Record<string, unknown>>();
+    for (const c of allContacts) {
+      if (typeof c['waId'] === 'string') contactByWaId.set(c['waId'], c);
+      if (typeof c['lid'] === 'string') contactByWaId.set(c['lid'], c);
+    }
+
+    // 3. Process messages into conversations and messages collections
+    for (const message of history.messages) {
+      const normalized = this.normalizeMessage(account.id, account.tenantId, message, ownJid);
+      if (!normalized) continue;
+
+      let contact = contactByWaId.get(normalized.waId);
+      if (!contact && normalized.lid) contact = contactByWaId.get(normalized.lid);
+      if (!contact) {
+        const waId = normalized.waId;
+        const isGroup = normalized.isGroup;
+        await contactsColl.updateOne(
+          { tenantId, waId },
+          {
+            $set: {
+              ...(normalized.pushName ? { pushName: normalized.pushName } : {}),
+              ...(normalized.phoneE164 ? { phoneE164: normalized.phoneE164 } : {}),
+              updatedAt: now
+            },
+            $setOnInsert: { createdAt: now, isGroup, tags: [], customFields: {} }
+          },
+          { upsert: true }
+        );
+        const inserted = await contactsColl.findOne({ tenantId, waId });
+        if (inserted) {
+          contact = inserted;
+          contactByWaId.set(waId, contact);
+          if (typeof contact['lid'] === 'string') contactByWaId.set(contact['lid'], contact);
+        }
+      }
+      if (!contact) continue;
+
+      const contactId = contact['_id'] as Types.ObjectId;
+      const conversationFilter = { tenantId, accountId, contactId };
+      const preview = normalized.text?.trim() || normalized.caption?.trim() || '';
+      const visibleMessage = normalized.type !== 'system' && normalized.type !== 'reaction';
+
+      await convsColl.updateOne(conversationFilter, {
+        $setOnInsert: {
+          status: 'open',
+          unreadCount: 0,
+          lastMessageAt: normalized.timestamp,
+          lastMessagePreview: preview,
+          lastMessageType: normalized.type,
+          lastMessageDirection: normalized.direction,
+          createdAt: now,
+          updatedAt: now
+        }
+      }, { upsert: true });
+
+      const conv = await convsColl.findOne(conversationFilter);
+      if (!conv) continue;
+
+      const messageFilter = { tenantId, accountId, waMessageId: normalized.waMessageId };
+      await msgsColl.updateOne(messageFilter, {
+        $setOnInsert: {
+          tenantId, accountId, conversationId: conv['_id'] as Types.ObjectId, contactId,
+          waMessageId: normalized.waMessageId, direction: normalized.direction, type: normalized.type,
+          text: normalized.text, caption: normalized.caption, location: normalized.location,
+          contacts: normalized.contacts, poll: normalized.poll, pollVote: normalized.pollVote,
+          interactive: normalized.interactive, template: normalized.template, reaction: normalized.reaction,
+          quotedWaMessageId: normalized.quotedWaMessageId, mentions: normalized.mentions,
+          forwarded: normalized.forwarded, raw: normalized.raw, timestamp: normalized.timestamp,
+          status: normalized.direction === 'out' ? 'sent' : 'delivered', statusHistory: [],
+          createdAt: now, updatedAt: now
+        }
+      }, { upsert: true });
+
+      if (visibleMessage) {
+        await convsColl.updateOne(
+          { ...conversationFilter, $or: [{ lastMessageType: 'system' }, { lastMessageAt: { $lte: normalized.timestamp } }] },
+          {
+            $set: {
+              lastMessageAt: normalized.timestamp,
+              lastMessagePreview: preview,
+              lastMessageType: normalized.type,
+              lastMessageDirection: normalized.direction,
+              updatedAt: now
+            }
+          }
+        );
+      }
+    }
+    this.logger.log(`Direct DB history persistence completed for account ${account.id}: stored contacts, conversations, and messages`);
   }
 
   private async importHistoryMappings(

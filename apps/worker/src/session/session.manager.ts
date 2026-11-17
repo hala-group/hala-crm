@@ -64,12 +64,12 @@ export class SessionManager {
         if (!lease) continue;
         try {
           let accepting = true;
-          let terminalDuringOpen: 'logged_out' | 'disconnected' | 'error' | null = null;
+          let terminalDuringOpen: 'logged_out' | 'error' | null = null;
           const session = await provider.open(account, lease.fencingToken, async event => {
             if (!accepting) return;
             await this.leases.assertOwned(lease);
             await this.emit(event);
-            if (event.type === 'wa.connection' && (event.status === 'logged_out' || event.status === 'disconnected' || event.status === 'error')) {
+            if (event.type === 'wa.connection' && (event.status === 'logged_out' || event.status === 'error')) {
               terminalDuringOpen = event.status;
             }
           });
