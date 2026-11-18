@@ -62,6 +62,7 @@ export const normalizedInboundSchema = z.object({
   waMessageId: z.string().min(1),
   waId: z.string().min(1), lid: z.string().optional(), phoneE164: z.string().optional(),
   pushName: z.string().optional(), isGroup: z.boolean().default(false), isSelf: z.boolean().optional(),
+  sender: z.object({ waId: z.string().min(1), name: z.string().optional(), phoneE164: z.string().optional() }).optional(),
   direction: z.enum(['in', 'out']), type: messageTypeSchema,
   history: z.boolean().optional(),
   timestamp: z.coerce.date(),
@@ -97,6 +98,7 @@ export interface MessageView {
   _id: string; tenantId: string; accountId: string; conversationId: string; contactId: string;
   waMessageId: string; direction: 'in' | 'out'; type: MessageType; timestamp: string;
   clientMessageId?: string; failureReason?: string;
+  sender?: { contactId: string; name?: string; waId: string; phoneE164?: string };
   editedAt?: string; revokedAt?: string;
   text?: string; caption?: string; mediaId?: string;
   location?: { lat: number; lng: number; name?: string; address?: string };

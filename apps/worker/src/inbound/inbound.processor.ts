@@ -200,6 +200,19 @@ export class InboundProcessor {
     const conversationFilter = { tenantId, accountId, contactId: contact._id };
     const preview = data.text?.trim() || data.caption?.trim() || '';
     const visibleMessage = data.type !== 'system' && data.type !== 'reaction';
+    let sender: MessageView['sender'];
+    if (data.isGroup && data.sender) {
+      const senderFilter = { tenantId, waId: data.sender.waId };
+      await contacts.updateOne(senderFilter, { $set: {
+        ...(data.sender.name?.trim() ? { pushName: data.sender.name.trim() } : {}),
+        ...(data.sender.phoneE164 ? { phoneE164: data.sender.phoneE164 } : {}), updatedAt: now
+      }, $setOnInsert: { createdAt: now, isGroup: false, tags: [], customFields: {} } }, { upsert: true });
+      const senderContact = await contacts.findOne(senderFilter);
+      if (senderContact) sender = { contactId: senderContact._id.toString(), waId: data.sender.waId,
+        name: contactDisplayName({ displayName: senderContact['displayName'] as string | undefined,
+          pushName: senderContact['pushName'] as string | undefined, waId: data.sender.waId,
+          phoneE164: data.sender.phoneE164 }), phoneE164: data.sender.phoneE164 };
+    }
     const canUpdatePreview = { ...conversationFilter, $or: [{ lastMessageType: 'system' },
       { lastMessageAt: { $lte: data.timestamp } },
       ...(data.history ? [{ lastMessageType: 'text', lastMessagePreview: '' }] : [])] };
@@ -213,6 +226,7 @@ export class InboundProcessor {
     const insert = await messages.updateOne(messageFilter, { $setOnInsert: {
       tenantId, accountId, conversationId: conversation._id, contactId: contact._id,
       waMessageId: data.waMessageId, direction: data.direction, type: data.type,
+      ...(sender ? { senderContactId: new Types.ObjectId(sender.contactId), sender } : {}),
       text: data.text, caption: data.caption, location: data.location, contacts: data.contacts,
       poll: data.poll, pollVote: data.pollVote, interactive: data.interactive, template: data.template,
       reaction: data.reaction, quotedWaMessageId: data.quotedWaMessageId,
@@ -274,6 +288,7 @@ export class InboundProcessor {
         message: { _id: message._id.toString(), tenantId: data.tenantId, accountId: data.accountId,
           conversationId: conversation._id.toString(), contactId: contact._id.toString(), waMessageId: data.waMessageId,
           direction: data.direction, type: data.type, timestamp: data.timestamp.toISOString(),
+          sender,
           text: data.text, caption: data.caption, location: data.location, contacts: data.contacts,
           poll: data.poll, pollVote: data.pollVote, interactive: data.interactive, template: data.template,
           reaction: data.reaction, quotedWaMessageId: data.quotedWaMessageId,

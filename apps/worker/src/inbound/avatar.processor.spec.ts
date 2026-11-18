@@ -65,6 +65,20 @@ describe('profile pictures', () => {
     expect(record?.['commonGroups']).toEqual([{ id: '12345@g.us', name: 'Friends' }]);
   });
 
+  it('allows group sender photos only for a sender associated with the same tenant and account', async () => {
+    const senderId = new Types.ObjectId();
+    await connection.db!.collection('contacts').insertOne({ _id: senderId, tenantId, waId: '201009999999@s.whatsapp.net' });
+    const command = { type: 'refresh_avatar' as const, tenantId: tenantId.toString(),
+      accountId: accountId.toString(), contactId: senderId.toString() };
+    await expect(processor.process(command)).rejects.toThrow('AVATAR_SCOPE_MISSING');
+    await connection.db!.collection('messages').insertOne({ tenantId, accountId: new Types.ObjectId(), senderContactId: senderId });
+    await expect(processor.process(command)).rejects.toThrow('AVATAR_SCOPE_MISSING');
+    await connection.db!.collection('messages').insertOne({ tenantId, accountId, senderContactId: senderId });
+    picture.mockResolvedValueOnce(null);
+    await expect(processor.process(command)).resolves.toBeUndefined();
+    expect(picture).toHaveBeenLastCalledWith(accountId.toString(), tenantId.toString(), '201009999999@s.whatsapp.net');
+  });
+
   it('updates group displayName when refreshing a group profile with a subject', async () => {
     const groupContactId = new Types.ObjectId();
     const groupConvId = new Types.ObjectId();

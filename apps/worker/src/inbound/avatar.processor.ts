@@ -89,7 +89,8 @@ export class AvatarProcessor {
       db.collection('contacts').findOne({ _id: contactId, tenantId }),
       db.collection('conversations').findOne({ ...filter }, { projection: { _id: 1 } })
     ]);
-    if (!account || !contact || !conversation) throw new Error('AVATAR_SCOPE_MISSING');
+    const senderMessage = !conversation && await db.collection('messages').findOne({ tenantId, accountId, senderContactId: contactId }, { projection: { _id: 1 } });
+    if (!account || !contact || (!conversation && !senderMessage)) throw new Error('AVATAR_SCOPE_MISSING');
     const waId = contact['waId'] as string | undefined;
     const phone = (contact['phoneE164'] as string | undefined)?.replace(/\D/g, '');
     const jid = waId?.endsWith('@s.whatsapp.net') || waId?.endsWith('@g.us') ? waId

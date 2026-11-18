@@ -1,15 +1,32 @@
-import { Body, Controller, Delete, Get, Inject, Post, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, Post, Req, Res, StreamableFile } from '@nestjs/common';
+import { type Response } from 'express';
 import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { messagePushInstallationSchema, type MessagePushInstallationInput } from '@hala/shared';
+import { messagePushInstallationSchema, messagePushAvatarTokenSchema, type MessagePushInstallationInput } from '@hala/shared';
 import { type AuthenticatedRequest } from '../../common/auth.types.js';
 import { CheckPolicy } from '../../common/check-policy.decorator.js';
 import { MessagePushService } from './message-push.service.js';
+import { MessagePushContentService } from './message-push-content.service.js';
+import { Public } from '../../common/public.decorator.js';
 
 @ApiTags('message-push')
 @ApiBearerAuth()
 @Controller('message-push')
 export class MessagePushController {
-  constructor(@Inject(MessagePushService) private readonly push: MessagePushService) {}
+  constructor(@Inject(MessagePushService) private readonly push: MessagePushService,
+    @Inject(MessagePushContentService) private readonly content: MessagePushContentService) {}
+
+  @Get('avatar/:token')
+  @Public()
+  @ApiOperation({ summary: 'Open a short-lived notification avatar after verifying its signature and current recipient access' })
+  async avatar(@Param('token', { schema: messagePushAvatarTokenSchema }) token: string,
+    @Res({ passthrough: true }) response: Response) {
+    const asset = await this.content.openAvatar(token);
+    response.setHeader('Cache-Control', 'private, no-store');
+    response.setHeader('Referrer-Policy', 'no-referrer');
+    if (!asset) { response.redirect('/assets/imgs/logo.webp'); return; }
+    response.setHeader('Content-Type', asset.mimeType);
+    return new StreamableFile(asset.stream);
+  }
 
   @Get('config')
   @CheckPolicy('conversations:read')

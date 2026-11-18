@@ -10,6 +10,7 @@ import { type UserRecord } from '../users/user.schema.js';
 import { type WhatsAppAccountRecord } from '../whatsapp-accounts/account.schema.js';
 import { FirebaseMessagingService } from './firebase-messaging.service.js';
 import { MessagePushService } from './message-push.service.js';
+import { type MessagePushContentService } from './message-push-content.service.js';
 import { type MessagePushInstallationRecord } from './message-push.schema.js';
 
 const disabledConfig: MessagePushConfig = { enabled: false };
@@ -26,7 +27,9 @@ function createService(overrides: {
     (overrides.conversations ?? {}) as Model<ConversationRecord>,
     (overrides.firebase ?? { config: () => disabledConfig, isConfigured: () => false }) as FirebaseMessagingService,
     (overrides.access ?? {}) as AccountAccessService,
-    (overrides.bus ?? { consume: vi.fn().mockResolvedValue(true) }) as RedisBusService
+    (overrides.bus ?? { consume: vi.fn().mockResolvedValue(true) }) as RedisBusService,
+    { describe: async () => ({ title: 'علي · المبيعات', body: 'private customer text', contactId: 'sender-id' }),
+      avatarUrl: () => '/api/v1/message-push/avatar/signed-photo' } as unknown as MessagePushContentService
   );
 }
 
@@ -61,7 +64,7 @@ function createDeliveryHarness(options: { secondConsume?: boolean; unregistered?
     { _id: deniedRoleId, permissions: ['conversations:read'] }
   ]) };
   const conversation = { _id: new Types.ObjectId(event.conversationId), accountId: accountObjectId,
-    tenantId: tenantObjectId, assignedUserId: allowedId };
+    tenantId: tenantObjectId, assignedUserId: allowedId, contactId: new Types.ObjectId(event.message.contactId) };
   const conversationQuery = { select: vi.fn().mockReturnThis(), lean: vi.fn().mockResolvedValue(conversation) };
   const fid = 'firebase-installation-allowed';
   const registration = { _id: new Types.ObjectId(), tenantId: tenantObjectId, userId: allowedId, fid };
@@ -100,7 +103,7 @@ describe('MessagePushService', () => {
       expect.objectContaining({ $set: { userId: new Types.ObjectId(principal.id), lastRegisteredAt: expect.any(Date) } }), { upsert: true });
   });
 
-  it('sends a generic push only to users who can still read the conversation and claims each event once', async () => {
+  it('sends a message preview only to users who can still read the conversation and claims each event once', async () => {
     const harness = createDeliveryHarness({ secondConsume: true });
     await harness.service.deliver(harness.event);
     await harness.service.deliver(harness.event);
@@ -120,7 +123,9 @@ describe('MessagePushService', () => {
     expect(payload.webpush.notification.data.onActionClick.default).toMatchObject({
       operation: 'navigateLastFocusedOrOpen', url: `/inbox/${harness.event.conversationId}`
     });
-    expect(JSON.stringify(payload)).not.toContain('private customer text');
+    expect(payload.notification).toEqual({ title: 'علي · المبيعات', body: 'private customer text' });
+    expect(payload.webpush.notification).toMatchObject({ title: 'علي · المبيعات', body: 'private customer text',
+      icon: '/api/v1/message-push/avatar/signed-photo' });
   });
 
   it('does not send push for outgoing or system messages', async () => {

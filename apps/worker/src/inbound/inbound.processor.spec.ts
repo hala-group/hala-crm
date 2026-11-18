@@ -73,6 +73,23 @@ describe('inbound persistence', () => {
     expect(events.filter(event => event.type === 'message.created' && event.message.conversationId === conversation?._id.toString())).toHaveLength(1);
   });
 
+  it('persists the group sender and publishes their identity without replacing the group name', async () => {
+    const db = connection.db!;
+    const groupId = new Types.ObjectId();
+    await db.collection('contacts').insertOne({ _id: groupId, tenantId, waId: '8888@g.us', isGroup: true, displayName: 'المبيعات' });
+    await processor.process({ tenantId: tenantId.toString(), accountId: accountId.toString(),
+      waId: '8888@g.us', waMessageId: 'group-with-sender', isGroup: true, pushName: 'اسم العضو', direction: 'in',
+      type: 'text', text: 'تفاصيل الطلب', timestamp: new Date(),
+      sender: { waId: '201008888888@s.whatsapp.net', name: 'اسم العضو', phoneE164: '+201008888888' } });
+    const member = await db.collection('contacts').findOne({ tenantId, waId: '201008888888@s.whatsapp.net' });
+    const message = await db.collection('messages').findOne({ tenantId, accountId, waMessageId: 'group-with-sender' });
+    expect(message?.['senderContactId']).toEqual(member?._id);
+    expect(message?.['sender']).toMatchObject({ name: 'اسم العضو', contactId: member?._id.toString() });
+    expect((await db.collection('contacts').findOne({ _id: groupId }))?.['displayName']).toBe('المبيعات');
+    expect(events.find(event => event.type === 'message.created' && event.message.waMessageId === 'group-with-sender'))
+      .toMatchObject({ message: { sender: { name: 'اسم العضو', contactId: member?._id.toString() }, text: 'تفاصيل الطلب' } });
+  });
+
   it('stores media bytes outside MongoDB and remains idempotent', async () => {
     const input: NormalizedInboundMessage = {
       tenantId: tenantId.toString(), accountId: accountId.toString(), waMessageId: 'media-doc',

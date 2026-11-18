@@ -24,6 +24,8 @@ export interface ConversationRecord {
 export interface MessageRecord {
   tenantId: Types.ObjectId; accountId: Types.ObjectId; conversationId: Types.ObjectId; contactId: Types.ObjectId;
   waMessageId: string; clientMessageId?: string; direction: 'in' | 'out'; type: MessageType;
+  senderContactId?: Types.ObjectId;
+  sender?: { contactId: string; name?: string; waId: string; phoneE164?: string };
   text?: string; caption?: string; mediaId?: Types.ObjectId;
   location?: { lat: number; lng: number; name?: string; address?: string };
   contacts?: { name: string; phones: string[]; vcard?: string }[];
@@ -94,6 +96,8 @@ export const messageSchema = new Schema<MessageRecord>({
   conversationId: { type: Schema.Types.ObjectId, required: true },
   contactId: { type: Schema.Types.ObjectId, required: true },
   waMessageId: { type: String, required: true }, clientMessageId: String,
+  senderContactId: Schema.Types.ObjectId,
+  sender: { contactId: String, name: String, waId: String, phoneE164: String },
   direction: { type: String, enum: ['in', 'out'], required: true },
   type: { type: String, required: true }, text: String, caption: String,
   mediaId: Schema.Types.ObjectId,
@@ -125,6 +129,7 @@ export const messageSchema = new Schema<MessageRecord>({
 messageSchema.index({ tenantId: 1, accountId: 1, waMessageId: 1 }, { unique: true });
 messageSchema.index({ tenantId: 1, accountId: 1, clientMessageId: 1 }, { unique: true, partialFilterExpression: { clientMessageId: { $type: 'string' } } });
 messageSchema.index({ conversationId: 1, timestamp: -1, _id: -1 });
+messageSchema.index({ tenantId: 1, accountId: 1, senderContactId: 1, conversationId: 1 });
 messageSchema.index({ text: 'text', caption: 'text' });
 messageSchema.plugin(tenantPlugin);
 

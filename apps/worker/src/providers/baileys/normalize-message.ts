@@ -74,6 +74,8 @@ export function normalizeBaileysMessage(accountId: string, tenantId: string, mes
     phoneE164: phoneFromJid(pnJid || remoteJid),
     pushName: isSelf ? 'أنت' : (message.pushName ?? undefined),
     isGroup,
+    ...(isGroup && message.key.participant ? { sender: { waId: message.key.participantPn || message.key.participant,
+      name: message.pushName ?? undefined, phoneE164: phoneFromJid(message.key.participantPn || message.key.participant) } } : {}),
     isSelf: isSelf || undefined,
     direction: message.key.fromMe ? 'out' : 'in', type: 'unknown',
     timestamp: new Date((seconds > 0 ? seconds : Date.now() / 1000) * 1000),

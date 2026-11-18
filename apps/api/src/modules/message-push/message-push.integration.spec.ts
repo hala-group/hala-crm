@@ -12,6 +12,7 @@ import { type UserRecord } from '../users/user.schema.js';
 import { type WhatsAppAccountRecord } from '../whatsapp-accounts/account.schema.js';
 import { type FirebaseMessagingService } from './firebase-messaging.service.js';
 import { MessagePushService } from './message-push.service.js';
+import { type MessagePushContentService } from './message-push-content.service.js';
 import { messagePushInstallationSchema, type MessagePushInstallationRecord } from './message-push.schema.js';
 
 describe('MessagePushService database integration', () => {
@@ -40,7 +41,8 @@ describe('MessagePushService database integration', () => {
     const fid = 'same-installation-across-tenant-records';
     const service = new MessagePushService(installations, {} as Model<UserRecord>, {} as Model<RoleRecord>,
       {} as Model<WhatsAppAccountRecord>, {} as Model<ConversationRecord>,
-      { isConfigured: () => true } as FirebaseMessagingService, {} as AccountAccessService, {} as RedisBusService);
+      { isConfigured: () => true } as FirebaseMessagingService, {} as AccountAccessService, {} as RedisBusService,
+      {} as MessagePushContentService);
 
     await service.subscribe({ id: firstUser, tenantId } as Principal, fid);
     await service.subscribe({ id: nextUser, tenantId } as Principal, fid);
@@ -109,7 +111,8 @@ describe('MessagePushService database integration', () => {
       { find: vi.fn(() => query(roles)) } as unknown as Model<RoleRecord>,
       { exists: vi.fn().mockResolvedValue(true) } as unknown as Model<WhatsAppAccountRecord>,
       conversations, firebase as unknown as FirebaseMessagingService, access as unknown as AccountAccessService,
-      { consume: vi.fn().mockResolvedValue(true) } as unknown as RedisBusService);
+      { consume: vi.fn().mockResolvedValue(true) } as unknown as RedisBusService,
+      { describe: async () => ({ title: 'علي', body: 'مرحباً' }), avatarUrl: () => '/assets/imgs/logo.webp' } as unknown as MessagePushContentService);
 
     await service.deliver(event);
 

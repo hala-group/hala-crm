@@ -8,6 +8,15 @@ const make = (message: WAMessage['message'], extras: Partial<WAMessage> = {}): W
 });
 
 describe('Baileys inbound normalizer', () => {
+  it('keeps a group participant separate from the group and resolves their phone identity', () => {
+    const result = normalizeBaileysMessage('a', 'b', make({ conversation: 'مرحبا' }, {
+      key: { remoteJid: '12345@g.us', participant: '77777@lid', participantPn: '201001234567@s.whatsapp.net', id: 'group-message' },
+      pushName: 'علي'
+    }));
+    expect(result).toMatchObject({ waId: '12345@g.us', isGroup: true,
+      sender: { waId: '201001234567@s.whatsapp.net', phoneE164: '+201001234567', name: 'علي' } });
+  });
+
   it.each([
     [{ conversation: 'hello' }, 'text'],
     [{ imageMessage: { mimetype: 'image/jpeg' } }, 'image'],

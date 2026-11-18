@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const firebaseInstallationSchema = z.string().trim().min(1).max(128);
 
 export const messagePushInstallationSchema = z.object({ fid: firebaseInstallationSchema });
+export const messagePushAvatarTokenSchema = z.string().min(1).max(1500);
 export type MessagePushInstallationInput = z.infer<typeof messagePushInstallationSchema>;
 
 export const messagePushConfigSchema = z.discriminatedUnion('enabled', [
