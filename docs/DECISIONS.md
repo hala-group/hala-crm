@@ -1,5 +1,11 @@
 # Hala CRM decisions
 
+## Compact mobile inbox (2026-11-19)
+
+- At the user's request, move the mobile navigation into a modal side drawer, keep search and an icon-only new-conversation action on one row, and put a compact account-color selector beside the inbox title. The selector retains account labels, phone numbers and the selected state in its popup; color never becomes the only accessible identifier. Desktop navigation remains inline.
+- Use the browser's native modal dialog for focus containment, Escape dismissal and focus restoration. Keep one permission-filtered navigation template for desktop and drawer. Reuse the existing account filter and send permissions; no new API or dependency is needed. Size the mobile inbox from the single-row app header so the conversation list uses the remaining viewport height.
+- Verification: `pnpm lint && pnpm typecheck && pnpm test && pnpm build` passes (182 tests, two existing optional tests skipped). Six Playwright checks against the production build pass at 320/390/720px plus desktop: no page overflow, search/new-chat alignment, modal dismissal and focus behavior, account selection/filter requests, selected colors, permissions and desktop navigation. Local browser QA used the installed Edge with isolated API fixtures; no customer data or real messages were used.
+
 ## Phase 0 (2026-10-24)
 
 - **Workspace location:** The writable project directory is `Front-end`, so it hosts the pnpm monorepo (`apps/*`, `packages/*`). The provided `AGENTS.md` and `HALA_CRM_SPEC.md` were copied unchanged into this root, making the monorepo self-contained; these root copies are authoritative for subsequent phases. This differs from the `hala-crm/` folder name drawn in the spec. The sibling `Nestjs` folder is unused.

@@ -43,6 +43,13 @@ import {
 type TimelineEntry = { kind: 'message'; id: string; timestamp: string; message: MessageView }
   | { kind: 'call'; id: string; timestamp: string; call: CallView };
 
+function fallbackAccountColor(id: string): string {
+  const colors = ['#008069', '#0284c7', '#9333ea', '#d97706', '#db2777', '#4f46e5'];
+  let hash = 0;
+  for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) | 0;
+  return colors[(hash >>> 0) % colors.length]!;
+}
+
 export function getTagColor(tag: string): { bg: string; text: string; border: string } {
   const palettes = [
     { bg: '#e0f2fe', text: '#0369a1', border: '#bae6fd' },
@@ -68,29 +75,14 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
   template: `
     <section class="inbox" dir="rtl" [class.has-selection]="!!selected()">
       <aside class="inbox-list">
+        <div class="list-toolbar">
         <div class="list-header">
           <h2>البريد الوارد</h2>
-          <button type="button" (click)="showNewChat.set(!showNewChat())">محادثة جديدة</button>
         </div>
-        @if (showNewChat()) {
-          <div class="new-chat">
-            <select [formField]="newChatFields.accountId" aria-label="رقم الإرسال">
-              <option value="">اختر الرقم</option>
-              @for (account of accounts.accounts(); track account._id) {
-                @if (canSendAccount(account._id)) {
-                  <option [value]="account._id">{{ account.label }}</option>
-                }
-              }
-            </select>
-            <input [formField]="newChatFields.to" placeholder="رقم المستلم" />
-            <textarea [formField]="newChatFields.text" placeholder="الرسالة الأولى"></textarea>
-            <button type="button" (click)="sendNewChat()">بدء المحادثة</button>
-            @if (newChatError()) {
-              <p role="alert">{{ newChatError() }}</p>
-            }
-          </div>
-        }
-        <div class="filters">
+        <button class="new-chat-toggle" type="button" aria-label="محادثة جديدة" title="محادثة جديدة" [attr.aria-expanded]="showNewChat()" aria-controls="new-chat-panel" (click)="showNewChat.set(!showNewChat())">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11v8a2 2 0 0 1-2 2H5l-4 2V5a2 2 0 0 1 2-2h10M19 1v8M15 5h8" /></svg>
+          <span>محادثة جديدة</span>
+        </button>
           <div class="search-box">
             <input
               aria-label="بحث"
@@ -102,9 +94,11 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
               <button class="clear-search-btn" type="button" (click)="clearSearch()" aria-label="مسح البحث">✕</button>
             }
           </div>
-          <div class="filter-controls">
             <details #accountFilter class="filter-select" name="inbox-filter">
-              <summary aria-label="الرقم">{{ selectedAccountLabel() }}</summary>
+              <summary [attr.aria-label]="'تصفية حسب الرقم: ' + selectedAccountLabel()" [title]="selectedAccountLabel()">
+                <span class="account-color" [class.all-accounts-color]="!accountId()" [style.background]="selectedAccountColor()" aria-hidden="true"></span>
+                <span class="selected-account-label">{{ selectedAccountLabel() }}</span>
+              </summary>
               <div class="filter-dropdown-backdrop" (click)="accountFilter.open = false"></div>
               <div class="filter-options">
                 <button
@@ -112,7 +106,9 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
                   [attr.aria-pressed]="accountId() === ''"
                   (click)="setAccountId('')"
                 >
-                  كل الأرقام
+                  <span class="account-color all-accounts-color" aria-hidden="true"></span>
+                  <span class="account-option-label">كل الأرقام</span>
+                  @if (!accountId()) { <span class="account-check" aria-hidden="true">✓</span> }
                 </button>
                 @for (account of accounts.accounts(); track account._id) {
                   <button
@@ -120,7 +116,9 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
                     [attr.aria-pressed]="accountId() === account._id"
                     (click)="setAccountId(account._id)"
                   >
-                    {{ account.label }}
+                    <span class="account-color" [style.background]="accountColor(account._id)" aria-hidden="true"></span>
+                    <span class="account-option-label">{{ account.label }}@if (account.phoneNumber) { <small dir="ltr">{{ account.phoneNumber }}</small> }</span>
+                    @if (accountId() === account._id) { <span class="account-check" aria-hidden="true">✓</span> }
                   </button>
                 }
               </div>
@@ -136,8 +134,23 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
                 {{ searchMode() === 'messages' ? 'المحادثات' : '🔍 بالرسائل' }}
               </button>
             }
-          </div>
         </div>
+        @if (showNewChat()) {
+          <div class="new-chat" id="new-chat-panel">
+            <select [formField]="newChatFields.accountId" aria-label="رقم الإرسال">
+              <option value="">اختر الرقم</option>
+              @for (account of accounts.accounts(); track account._id) {
+                @if (canSendAccount(account._id)) {
+                  <option [value]="account._id">{{ account.label }}</option>
+                }
+              }
+            </select>
+            <input [formField]="newChatFields.to" placeholder="رقم المستلم" />
+            <textarea [formField]="newChatFields.text" placeholder="الرسالة الأولى"></textarea>
+            <button type="button" (click)="sendNewChat()">بدء المحادثة</button>
+            @if (newChatError()) { <p role="alert">{{ newChatError() }}</p> }
+          </div>
+        }
 
         @if (searchMode() === 'messages') {
           <div class="message-search-panel">
@@ -1181,7 +1194,7 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
         display: grid;
         grid-template-columns: minmax(20rem, 26rem) minmax(0, 1fr) minmax(17rem, 22rem);
         gap: 0;
-        height: calc(100dvh - 6.2rem);
+        height: calc(100dvh - var(--shell-header-height, 4.5rem) - 2 * var(--shell-content-padding, 1rem));
         min-height: 34rem;
         overflow: hidden;
         border: 1px solid var(--wa-border);
@@ -1252,30 +1265,42 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
         flex-wrap: wrap;
         gap: 0.6rem;
         margin: 0;
-        padding: 0.85rem 1rem 0.7rem;
+        padding: 0;
+        grid-column: 1;
+        grid-row: 1;
         background: var(--wa-header);
       }
       .list-header h2 {
         margin: 0;
         font-size: 1.12rem;
       }
-      .list-header button {
+      .new-chat-toggle {
+        grid-column: 2;
+        grid-row: 1;
+        display: inline-flex;
+        justify-content: center;
+        align-items: center;
+        gap: .4rem;
         min-height: 2.3rem;
         font-size: 0.82rem;
         white-space: nowrap;
       }
-      .filters {
+      .new-chat-toggle svg { display: none; }
+      .list-toolbar {
         position: relative;
         z-index: 35;
-        display: flex;
-        flex-direction: column;
-        gap: 0.45rem;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 0.45rem .5rem;
         margin: 0;
-        padding: 0 0.75rem 0.65rem;
+        padding: .65rem .75rem;
         border-block-end: 1px solid #e9edef;
         background: var(--wa-header);
       }
       .search-box {
+        grid-column: 1 / -1;
+        grid-row: 2;
         position: relative;
         display: flex;
         align-items: center;
@@ -1306,17 +1331,11 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
         font-size: 0.7rem;
         cursor: pointer;
       }
-      .filter-controls {
-        display: flex;
-        align-items: center;
-        gap: 0.45rem;
-        width: 100%;
-      }
-      .filter-controls .filter-select {
-        flex: 1;
-        min-width: 0;
-      }
+      .list-toolbar > .filter-select { grid-column: 1 / -1; grid-row: 3; min-width: 0; }
+      .list-toolbar:has(.search-messages-toggle) > .filter-select { grid-column: 1; }
       .search-messages-toggle {
+        grid-row: 3;
+        grid-column: 2;
         min-height: 2.35rem;
         padding: 0.4rem 0.65rem;
         border: 1px solid #cbd5e1;
@@ -1752,7 +1771,14 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
         list-style: none;
         white-space: nowrap;
         text-overflow: ellipsis;
+        gap: .55rem;
       }
+      .selected-account-label { overflow: hidden; text-overflow: ellipsis; }
+      .account-color { display: inline-block; width: 1rem; height: 1rem; flex: 0 0 1rem; border-radius: 50%; background: #008069; border: 1px solid #0002; box-shadow: 0 0 0 2px #fff; }
+      .all-accounts-color { background: conic-gradient(#008069 0deg 90deg, #0284c7 90deg 180deg, #9333ea 180deg 270deg, #d97706 270deg); }
+      .account-option-label { min-width: 0; overflow-wrap: anywhere; }
+      .account-option-label small { display: block; margin-block-start: .15rem; color: #667781; font-size: .75rem; text-align: start; }
+      .account-check { margin-inline-start: auto; font-weight: 700; }
       .filter-select summary::-webkit-details-marker {
         display: none;
       }
@@ -1797,6 +1823,9 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
         box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.18), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
       }
       .filter-options button {
+        display: flex;
+        align-items: center;
+        gap: .65rem;
         padding: 0.7rem 0.8rem;
         border-radius: 0.45rem;
         background: transparent;
@@ -2875,7 +2904,7 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
       @media (max-width: 720px) {
         .inbox {
           grid-template-columns: minmax(0, 1fr);
-          height: calc(100dvh - 5.5rem);
+          height: calc(100dvh - var(--shell-header-height, 3.75rem) - 2 * var(--shell-content-padding, 0rem));
           min-height: 0;
           border-inline: 0;
           border-radius: 0;
@@ -2897,8 +2926,25 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
           display: none !important;
         }
         .list-header {
-          min-height: 3.65rem;
+          min-height: 2.75rem;
         }
+        .list-header h2 { font-size: 1rem; }
+        .list-toolbar { gap: .35rem .5rem; padding: .35rem .6rem .5rem; }
+        .list-toolbar > .filter-select, .list-toolbar:has(.search-messages-toggle) > .filter-select { grid-row: 1; grid-column: 2; justify-self: end; }
+        .filter-select summary { justify-content: center; width: 2.75rem; height: 2.75rem; min-height: 2.75rem; padding: .4rem; border-radius: 50%; gap: .25rem; }
+        .filter-select summary .account-color { width: 1.15rem; height: 1.15rem; flex-basis: 1.15rem; }
+        .filter-select summary::after { margin-inline-start: 0; width: .3rem; height: .3rem; }
+        .selected-account-label { display: none; }
+        .filter-options { inset-inline: auto 0; width: min(19rem, calc(100vw - 1.2rem)); max-height: min(22rem, 55dvh); }
+        .filter-options button { min-height: 2.75rem; }
+        .search-box { grid-column: 1; min-width: 0; }
+        .search-box input { min-width: 0; height: 2.75rem; font-size: 1rem; }
+        .new-chat-toggle { grid-column: 2; grid-row: 2; width: 2.75rem; height: 2.75rem; min-height: 2.75rem; padding: 0; border-radius: .65rem; }
+        .new-chat-toggle svg { display: block; }
+        .new-chat-toggle span { display: none; }
+        .search-messages-toggle { grid-column: 1 / -1; grid-row: 3; justify-self: start; }
+        .filter-tabs-bar { gap: .3rem; padding: .4rem .6rem; }
+        .tab-chip { flex: 0 0 auto; min-height: 2.25rem; padding: .3rem .6rem; white-space: nowrap; }
         .conversations {
           height: 0;
         }
@@ -3003,6 +3049,13 @@ export class InboxComponent implements OnInit {
       this.accounts.accounts().find((account) => account._id === this.accountId())?.label ??
       'كل الأرقام',
   );
+  readonly selectedAccountColor = computed(() => this.accountId() ? this.accountColor(this.accountId()) : null);
+  private readonly accountColors = computed(() => new Map(this.accounts.accounts()
+    .map(account => [account._id, account.color || fallbackAccountColor(account._id)])));
+
+  accountColor(id: string): string {
+    return this.accountColors().get(id) ?? '#008069';
+  }
   readonly hasConversationFilters = computed(() => !!this.search().trim() || !!this.accountId());
   readonly searchMode = signal<'conversations' | 'messages'>('conversations');
   readonly inChatSearchOpen = signal(false);
@@ -3238,6 +3291,7 @@ export class InboxComponent implements OnInit {
   setAccountId(value: string): void {
     this.accountId.set(value);
     this.accountFilter()?.nativeElement.removeAttribute('open');
+    this.accountFilter()?.nativeElement.querySelector('summary')?.focus();
     this.refresh();
   }
   private cancelSearchDebounce(): void {
@@ -3614,6 +3668,11 @@ export class InboxComponent implements OnInit {
   }
 
   onEscape(): void {
+    const accountFilter = this.accountFilter()?.nativeElement;
+    if (accountFilter?.open) {
+      accountFilter.open = false;
+      accountFilter.querySelector('summary')?.focus();
+    }
     this.activeMessageId.set(null);
     if (this.reactionPickerMessageId()) {
       this.reactionPickerMessageId.set(null);
