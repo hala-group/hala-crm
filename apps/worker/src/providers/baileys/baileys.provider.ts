@@ -129,11 +129,12 @@ export class BaileysProvider implements WhatsAppProvider {
     let historyDownloads = Promise.resolve();
     let historyWrites = Promise.resolve();
     let credentialsWrite = Promise.resolve();
-    const importHistory = (history: HistoryBatch): void => {
+    const importHistory = (history: HistoryBatch): Promise<void> => {
       historyWrites = historyWrites.then(async () => {
         if (signal.aborted) return;
         await this.processHistoryData(history, account, emit, signal, socket.user?.id);
       }).catch(() => this.logger.error(`WhatsApp history persistence failed for account ${account.id}`));
+      return historyWrites;
     };
     const queueHistory = (message: proto.Message.IHistorySyncNotification): Promise<void> => {
       if (!message.initialHistBootstrapInlinePayload?.length && !(message.mediaKey?.length && message.directPath)) return historyDownloads;
@@ -143,7 +144,7 @@ export class BaileysProvider implements WhatsAppProvider {
         this.logger.log(`Reading WhatsApp history for account ${account.id}, ${batch}`);
         const history = await downloadHistoryBatch(message, signal);
         this.logger.log(`Decoded WhatsApp history for account ${account.id}, ${batch}: ${history.chats.length} chats, ${history.messages.length} messages`);
-        importHistory(history);
+        await importHistory(history);
       }).catch(error => {
         if (signal.aborted) return;
         const status = (error as { response?: { status?: number } } | undefined)?.response?.status;
@@ -452,7 +453,9 @@ export class BaileysProvider implements WhatsAppProvider {
         }
         if (await publish({ type: 'wa.message.in', accountId, tenantId, message: { ...normalized, history: true } })) {
           processed++;
-          if (processed % 250 === 0) this.logger.log(`WhatsApp history progress for account ${accountId}: ${processed} messages processed`);
+          if (processed === 1 || processed % 250 === 0) {
+            this.logger.log(`WhatsApp history progress for account ${accountId}: ${processed}/${history.messages.length} messages processed`);
+          }
         }
       } catch {
         failed++;

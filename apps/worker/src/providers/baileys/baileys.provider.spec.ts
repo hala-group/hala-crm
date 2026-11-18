@@ -42,37 +42,55 @@ it('persists a decoded history event while the raw download is still open', asyn
   }
 });
 
-it('replays only recently cached history notifications accepted by the linked session', async () => {
+it('replays recently accepted history notifications one batch at a time', async () => {
   const account = { id: new Types.ObjectId().toString(), tenantId: new Types.ObjectId().toString() };
   const creds = initAuthCreds();
-  creds.processedHistoryMessages = [{ key: { id: 'accepted-notification' }, messageTimestamp: 1_700_000_000 }];
+  const acceptedIds = ['first-notification', 'second-notification'];
+  creds.processedHistoryMessages = acceptedIds.map(id => ({ key: { id }, messageTimestamp: 1_700_000_000 }));
   const auth = { load: vi.fn().mockResolvedValue({ state: { creds, keys: { get: vi.fn(), set: vi.fn() } },
     saveCreds: vi.fn() }) };
   const syncType = proto.HistorySync.HistorySyncType.FULL;
-  const inline = deflateSync(proto.HistorySync.encode({ syncType,
-    conversations: [{ id: '201234567890@s.whatsapp.net', messages: [
-      { message: { key: { id: 'cached-history-message' }, message: { conversation: 'Recovered' } } }
-    ] }]
-  }).finish());
-  const raw = JSON.stringify({ protocolMessage: { historySyncNotification: { syncType,
-    initialHistBootstrapInlinePayload: inline } } }, BufferJSON.replacer);
+  const notification = (id: string, text: string) => {
+    const inline = deflateSync(proto.HistorySync.encode({ syncType,
+      conversations: [{ id: '201234567890@s.whatsapp.net', messages: [
+        { message: { key: { id }, message: { conversation: text } } }
+      ] }]
+    }).finish());
+    return { raw: JSON.stringify({ protocolMessage: { historySyncNotification: { syncType,
+      initialHistBootstrapInlinePayload: inline } } }, BufferJSON.replacer) };
+  };
   const accountLookup = vi.fn().mockResolvedValue({ _id: new Types.ObjectId(account.id) });
-  const find = vi.fn().mockReturnValue({ sort: () => [{ raw }] });
+  const readSecondNotification = vi.fn();
+  const find = vi.fn().mockReturnValue({ *sort() {
+    yield notification('first-history-message', 'Recovered first');
+    readSecondNotification();
+    yield notification('second-history-message', 'Recovered second');
+  } });
   const connection = { db: { collection: (name: string) => name === 'whatsapp_accounts'
     ? { findOne: accountLookup } : { find, updateOne: vi.fn() } } } as unknown as Connection;
   const provider = new BaileysProvider(auth as unknown as EncryptedAuthStateStore, connection);
   vi.mocked(makeWASocket).mockReturnValueOnce({ ev: new EventEmitter(), end: vi.fn() } as unknown as WASocket);
-  const emit = vi.fn(async (_event: ProviderEvent) => {});
+  let allowFirstWrite = () => {};
+  const firstWrite = new Promise<void>(resolve => { allowFirstWrite = resolve; });
+  const emit = vi.fn(async (event: ProviderEvent) => {
+    if (event.type === 'wa.message.in' && event.message.waMessageId === 'first-history-message') await firstWrite;
+  });
   const session = await provider.open(account, 1, emit);
+  const syncing = provider.syncHistory(account, []);
   try {
-    await provider.syncHistory(account, []);
+    await vi.waitFor(() => expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'wa.message.in',
+      message: expect.objectContaining({ waMessageId: 'first-history-message', text: 'Recovered first', history: true }) })));
+    expect(readSecondNotification).not.toHaveBeenCalled();
+    allowFirstWrite();
+    await syncing;
     expect(accountLookup).toHaveBeenCalledWith({ _id: new Types.ObjectId(account.id), tenantId: new Types.ObjectId(account.tenantId) },
       { projection: { _id: 1 } });
     expect(find).toHaveBeenCalledWith({ accountId: new Types.ObjectId(account.id),
-      id: { $in: ['accepted-notification'] }, createdAt: { $gte: expect.any(Date) } }, { projection: { raw: 1 } });
+      id: { $in: acceptedIds }, createdAt: { $gte: expect.any(Date) } }, { projection: { raw: 1 } });
     expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'wa.message.in',
-      message: expect.objectContaining({ waMessageId: 'cached-history-message', text: 'Recovered', history: true }) }));
+      message: expect.objectContaining({ waMessageId: 'second-history-message', text: 'Recovered second', history: true }) }));
   } finally {
+    allowFirstWrite();
     await session.close();
   }
 });
