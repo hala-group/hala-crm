@@ -1,7 +1,9 @@
+import { addAbortSignal } from 'node:stream';
+import { buffer } from 'node:stream/consumers';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { inflate } from 'node:zlib';
-import { downloadHistory, jidNormalizedUser, proto, type BaileysEventMap, type WASocket, type WAMessage } from '@whiskeysockets/baileys';
+import { downloadContentFromMessage, jidNormalizedUser, proto, type BaileysEventMap, type WASocket, type WAMessage } from '@whiskeysockets/baileys';
 import { type HistorySyncTarget, type ProviderContact } from '@hala/shared';
 import { contactsFromHistoryMappings } from './chat-contact.js';
 
@@ -15,36 +17,36 @@ export interface HistoryBatch {
   syncType?: proto.HistorySync.HistorySyncType | null;
 }
 
-export function historyBatchFromPayload(payload: proto.IHistorySync, inline: boolean): HistoryBatch {
+function historyBatchFromPayload(payload: proto.IHistorySync): HistoryBatch {
   const chats = payload.conversations ?? [];
   const contacts = contactsFromHistoryMappings(payload.phoneNumberToLidMappings ?? []);
-  // Baileys 6.7.24 rejects the entire downloaded batch if a message entry has no key.
-  const needsFallback = chats.some(chat => chat.messages?.some(item => !item.message?.key));
   const messages: WAMessage[] = [];
   for (const chat of chats) {
     for (const { message } of chat.messages ?? []) {
       if (!message?.key?.id) continue;
-      if (!message.key.remoteJid && chat.id) {
-        messages.push({ ...message, key: { ...message.key, remoteJid: chat.id } });
-      } else if ((inline || needsFallback) && message.key.remoteJid) {
-        messages.push({ ...message, key: message.key });
-      }
+      const remoteJid = message.key.remoteJid || chat.id;
+      if (remoteJid) messages.push({ ...message, key: { ...message.key, remoteJid } });
     }
   }
-  if (inline || needsFallback) {
-    for (const name of payload.pushnames ?? []) {
-      if (name.id) contacts.push({ id: name.id, notify: name.pushname ?? undefined });
-    }
+  for (const name of payload.pushnames ?? []) {
+    if (name.id) contacts.push({ id: name.id, notify: name.pushname ?? undefined });
   }
-  return { chats: inline || needsFallback ? chats : [], contacts, messages, syncType: payload.syncType };
+  return { chats, contacts, messages, syncType: payload.syncType };
 }
 
-export async function supplementalHistory(notification: proto.Message.IHistorySyncNotification, signal: AbortSignal): Promise<HistoryBatch> {
-  const inline = notification.initialHistBootstrapInlinePayload;
-  const payload = inline?.length
-    ? proto.HistorySync.decode(await inflateHistory(inline, { maxOutputLength: 128 * 1024 * 1024 }))
-    : await downloadHistory(notification, { signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) });
-  return historyBatchFromPayload(payload, Boolean(inline?.length));
+export async function downloadHistoryBatch(notification: proto.Message.IHistorySyncNotification, signal: AbortSignal): Promise<HistoryBatch> {
+  let compressed = notification.initialHistBootstrapInlinePayload;
+  if (!compressed?.length) {
+    const deadline = AbortSignal.any([signal, AbortSignal.timeout(30_000)]);
+    const stream = await downloadContentFromMessage({
+      mediaKey: notification.mediaKey ?? undefined,
+      directPath: notification.directPath ?? undefined
+    }, 'md-msg-hist', { options: { signal: deadline } });
+    // Baileys pipes the response into a decrypting stream. Aborting the request alone can leave that stream open.
+    compressed = await buffer(addAbortSignal(deadline, stream));
+  }
+  const payload = proto.HistorySync.decode(await inflateHistory(compressed, { maxOutputLength: 128 * 1024 * 1024 }));
+  return historyBatchFromPayload(payload);
 }
 
 type HistoryPage = BaileysEventMap['messaging-history.set'];

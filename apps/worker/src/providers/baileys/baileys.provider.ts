@@ -7,7 +7,7 @@ import { EncryptedAuthStateStore } from './auth-state.store.js';
 import { normalizeBaileysMessage } from './normalize-message.js';
 import { InitialHistorySync } from './initial-history-sync.js';
 import { chatReadStateFromUpdate, contactFromChat } from './chat-contact.js';
-import { type HistoryBatch, pageHistory, supplementalHistory } from './history.js';
+import { downloadHistoryBatch, type HistoryBatch, pageHistory } from './history.js';
 import { downloadBaileysMedia } from './media-downloader.js';
 
 export class BaileysProvider implements WhatsAppProvider {
@@ -125,14 +125,15 @@ export class BaileysProvider implements WhatsAppProvider {
     const syncFullHistory = this.initialHistory.useFullHistory(account.id, Boolean(state.creds.me || state.creds.account));
     if (syncFullHistory) this.logger.log(`Requesting initial WhatsApp history for account ${account.id}`);
     const historySession = new AbortController();
+    const signal = historySession.signal;
+    let historyDownloads = Promise.resolve();
     let historyWrites = Promise.resolve();
     let credentialsWrite = Promise.resolve();
-    const importHistory = (load: () => Promise<HistoryBatch>): void => {
+    const importHistory = (history: HistoryBatch): void => {
       historyWrites = historyWrites.then(async () => {
-        if (historySession.signal.aborted) return;
-        const history = await load();
-        await this.processHistoryData(history, account, emit, historySession.signal, socket.user?.id);
-      }).catch(() => this.logger.error(`WhatsApp history batch failed for account ${account.id}`));
+        if (signal.aborted) return;
+        await this.processHistoryData(history, account, emit, signal, socket.user?.id);
+      }).catch(() => this.logger.error(`WhatsApp history persistence failed for account ${account.id}`));
     };
     const socket = makeWASocket({
       auth: {
@@ -148,8 +149,22 @@ export class BaileysProvider implements WhatsAppProvider {
         return this.getMessage(account.id, key.id);
       },
       shouldSyncHistoryMessage: message => {
-        if (message.initialHistBootstrapInlinePayload?.length || (message.mediaKey && message.directPath)) {
-          importHistory(() => supplementalHistory(message, historySession.signal));
+        if (message.initialHistBootstrapInlinePayload?.length || (message.mediaKey?.length && message.directPath)) {
+          const batch = `type ${message.syncType ?? 'unknown'}, chunk ${message.chunkOrder ?? 'unknown'}`;
+          historyDownloads = historyDownloads.then(async () => {
+            if (signal.aborted) return;
+            this.logger.log(`Reading WhatsApp history for account ${account.id}, ${batch}`);
+            const history = await downloadHistoryBatch(message, signal);
+            this.logger.log(`Decoded WhatsApp history for account ${account.id}, ${batch}: ${history.chats.length} chats, ${history.messages.length} messages`);
+            importHistory(history);
+          }).catch(error => {
+            if (signal.aborted) return;
+            const status = (error as { response?: { status?: number } } | undefined)?.response?.status;
+            const reason = typeof status === 'number' ? `HTTP ${status}`
+              : error instanceof Error && ['AbortError', 'CanceledError', 'TimeoutError'].includes(error.name)
+                ? 'download timed out' : 'download or decode failed';
+            this.logger.warn(`WhatsApp history for account ${account.id}, ${batch}: ${reason}`);
+          });
         }
         return true;
       }
@@ -213,9 +228,7 @@ export class BaileysProvider implements WhatsAppProvider {
         }
       }
     });
-    socket.ev.on('messaging-history.set', history => {
-      importHistory(async () => history);
-    });
+    socket.ev.on('messaging-history.set', importHistory);
     socket.ev.on('contacts.upsert', contacts => { for (const contact of contacts) publishContact(contact); });
     socket.ev.on('contacts.update', contacts => { for (const contact of contacts) publishContact(contact); });
     socket.ev.on('groups.upsert', groups => {
@@ -292,7 +305,8 @@ export class BaileysProvider implements WhatsAppProvider {
       this.clearPolls(account.id);
       this.retryCaches.delete(account.id);
       socket.end(undefined);
-      await Promise.all([credentialsWrite, historyWrites]);
+      await Promise.all([credentialsWrite, historyDownloads]);
+      await historyWrites;
     } };
   }
 

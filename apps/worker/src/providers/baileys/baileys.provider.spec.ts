@@ -1,9 +1,45 @@
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { Types } from 'mongoose';
-import { type AnyMessageContent, type WASocket } from '@whiskeysockets/baileys';
-import { type OutgoingMessageInput, type ProviderSendRequest } from '@hala/shared';
+import makeWASocket, { downloadContentFromMessage, initAuthCreds, proto, type AnyMessageContent, type WASocket } from '@whiskeysockets/baileys';
+import { type OutgoingMessageInput, type ProviderEvent, type ProviderSendRequest } from '@hala/shared';
 import { type EncryptedAuthStateStore } from './auth-state.store.js';
 import { BaileysProvider } from './baileys.provider.js';
+
+vi.mock('@whiskeysockets/baileys', async importOriginal => ({
+  ...await importOriginal<typeof import('@whiskeysockets/baileys')>(),
+  default: vi.fn(),
+  downloadContentFromMessage: vi.fn()
+}));
+
+it('persists a decoded history event while the raw download is still open', async () => {
+  const account = { id: new Types.ObjectId().toString(), tenantId: new Types.ObjectId().toString() };
+  const auth = { load: vi.fn().mockResolvedValue({ state: { creds: initAuthCreds(), keys: { get: vi.fn(), set: vi.fn() } },
+    saveCreds: vi.fn() }) };
+  const provider = new BaileysProvider(auth as unknown as EncryptedAuthStateStore);
+  const ev = new EventEmitter();
+  const stream = new PassThrough();
+  vi.mocked(makeWASocket).mockReturnValueOnce({ ev, end: vi.fn() } as unknown as WASocket);
+  vi.mocked(downloadContentFromMessage).mockResolvedValueOnce(stream);
+  const emit = vi.fn(async (_event: ProviderEvent) => {});
+  const session = await provider.open(account, 1, emit);
+  try {
+    const config = vi.mocked(makeWASocket).mock.lastCall?.[0];
+    const syncType = proto.HistorySync.HistorySyncType.FULL;
+    expect(config?.shouldSyncHistoryMessage?.({ mediaKey: new Uint8Array(32), directPath: '/test-history', syncType })).toBe(true);
+    await vi.waitFor(() => expect(downloadContentFromMessage).toHaveBeenCalledOnce());
+    ev.emit('messaging-history.set', { chats: [], contacts: [], syncType, messages: [{
+      key: { id: 'decoded-history', remoteJid: '201234567890@s.whatsapp.net' }, message: { conversation: 'Saved' }
+    }] });
+    await vi.waitFor(() => expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'wa.message.in', message: expect.objectContaining({ waMessageId: 'decoded-history', history: true })
+    })));
+    expect(stream.destroyed).toBe(false);
+  } finally {
+    await session.close();
+  }
+});
 
 describe('BaileysProvider voice messages', () => {
   it('sends voice media as an Ogg/Opus push-to-talk message', async () => {

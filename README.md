@@ -21,6 +21,8 @@ Open **أرقام واتساب** to add a Baileys or Cloud API number. The creat
 
 Number managers can use **مزامنة الرسائل** on a connected Baileys number to fetch older messages for known chats that have a saved WhatsApp message. The worker requests successive pages and adds the history WhatsApp returns without deleting existing records. Keep the primary phone online while the request runs. The result depends on the history WhatsApp makes available to the linked device.
 
+If the initial import leaves the inbox empty, use **تسجيل الخروج** on the existing number, then link that number again and scan its new QR code. This requests a fresh initial sync and preserves the messages already stored by Hala CRM.
+
 **مسح الدردشات وإعادة استيرادها** deletes that number's conversations, messages, and media, logs the linked session out, then starts a fresh QR pairing. Scan the new QR code to import the chats and messages WhatsApp offers at pairing. Tenant contacts remain stored because they can be shared by multiple numbers.
 
 **حذف الرقم** permanently removes that number and its conversations, messages, stored media, and calls from Hala CRM after the WhatsApp session stops. The confirmation dialog warns that this cannot be undone. Shared tenant contacts and mandatory audit records remain.
