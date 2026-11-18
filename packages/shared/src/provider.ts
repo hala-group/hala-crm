@@ -29,7 +29,8 @@ export type ProviderEvent =
   | { type: 'wa.qr'; accountId: string; tenantId: string; qr: string }
   | { type: 'wa.connection'; accountId: string; tenantId: string; status: 'connecting' | 'connected' | 'disconnected' | 'logged_out' | 'error'; phoneNumber?: string; error?: string }
   | { type: 'wa.message.in'; accountId: string; tenantId: string; message: NormalizedInboundMessage }
-  | { type: 'wa.contact'; accountId: string; tenantId: string; contact: ProviderContact }
+  | { type: 'wa.contact'; accountId: string; tenantId: string; contact: ProviderContact;
+      historyChat?: { timestamp: Date; unreadCount: number } }
   | { type: 'wa.chat.read_state'; accountId: string; tenantId: string; chatId: string; isUnread: boolean; unreadCount?: number }
   | { type: 'wa.message.status'; accountId: string; tenantId: string; waMessageId: string; status: 'sent' | 'delivered' | 'read' | 'failed' }
   | ProviderCallEvent;
@@ -66,7 +67,7 @@ export interface AccountCommand {
   accountId: string;
   tenantId: string;
 }
-export interface HistorySyncCommand { type: 'sync_history'; accountId: string; tenantId: string }
+export interface HistorySyncCommand { type: 'sync_history'; accountId: string; tenantId: string; conversationId?: string }
 export interface RefreshAvatarCommand { type: 'refresh_avatar'; accountId: string; tenantId: string; contactId: string }
 export interface RefreshProfileCommand { type: 'refresh_profile'; accountId: string; tenantId: string; contactId: string }
 export type WorkerCommand = AccountCommand | HistorySyncCommand | RefreshAvatarCommand | RefreshProfileCommand | OutboundCommand;

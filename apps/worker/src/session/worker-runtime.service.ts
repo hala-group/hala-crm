@@ -22,6 +22,7 @@ import { SessionManager } from './session.manager.js';
 @Injectable()
 export class WorkerRuntimeService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(WorkerRuntimeService.name);
+  private readonly shutdown = new AbortController();
   private redis?: Redis;
   private eventSubscriber?: Redis;
   private commandWorker?: Worker<WorkerCommand>;
@@ -52,7 +53,7 @@ export class WorkerRuntimeService implements OnModuleInit, OnModuleDestroy {
     const leases = new LeaseService(new RedisLeaseBackend(redis), workerId, env.LEASE_TTL_MS);
     const repository = new MongoSessionRepository(mongo);
     const encryptionKey = process.env.ENCRYPTION_KEY_BASE64 ?? '';
-    const provider = new BaileysProvider(new EncryptedAuthStateStore(mongo, leases, encryptionKey), mongo);
+    const provider = new BaileysProvider(new EncryptedAuthStateStore(mongo, leases, encryptionKey), mongo, this.shutdown.signal);
     const cloud = new CloudApiProvider(mongo, encryptionKey, env.CLOUD_GRAPH_VERSION ?? '');
     const storage = createStorageRegistry();
     const processor = new InboundProcessor({ connection: mongo, storage, storageDriver: storage.defaultDriver,
@@ -81,11 +82,7 @@ export class WorkerRuntimeService implements OnModuleInit, OnModuleDestroy {
       { publish: async event => {
         if (event.type === 'wa.message.in') {
           if (event.message.history) {
-            try {
-              await processor.process(event.message);
-            } catch (err) {
-              this.logger.error(`Failed to process history message ${event.message.waMessageId}: ${(err as Error).message}`);
-            }
+            await processor.process(event.message);
           } else {
             const jobId = createHash('sha256').update(`${event.tenantId}/${event.accountId}/${event.message.waMessageId}`).digest('hex');
             await this.inboundQueue!.add('message', event.message, { jobId, attempts: 5, backoff: { type: 'exponential', delay: 1000 }, removeOnComplete: true });
@@ -155,6 +152,7 @@ export class WorkerRuntimeService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleDestroy(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
+    this.shutdown.abort();
     await this.commandWorker?.close();
     await this.avatarWorker?.close();
     await this.inboundWorker?.close();
@@ -172,32 +170,35 @@ export class WorkerRuntimeService implements OnModuleInit, OnModuleDestroy {
     if (!db) throw new Error('MONGO_NOT_READY');
     const tenantId = new mongoose.Types.ObjectId(command.tenantId);
     const accountId = new mongoose.Types.ObjectId(command.accountId);
-    const conversations = await db.collection('conversations').find({ tenantId, accountId },
-      { projection: { contactId: 1 } }).toArray();
-    const targets = await Promise.all(conversations.map(async conversation => {
+    const conversations = db.collection('conversations').find({
+      tenantId, accountId,
+      ...(command.conversationId ? { _id: new mongoose.Types.ObjectId(command.conversationId) } : {})
+    }, { projection: { contactId: 1 } });
+    const targets: HistorySyncTarget[] = [];
+    for await (const conversation of conversations) {
+      this.shutdown.signal.throwIfAborted();
       const contactId = conversation['contactId'];
-      if (!contactId) return null;
-      const [contact, oldest] = await Promise.all([
+      if (!contactId) continue;
+      const [contact, anchor] = await Promise.all([
         db.collection('contacts').findOne({ _id: contactId, tenantId }, { projection: { waId: 1, lid: 1 } }),
-        db.collection('messages').find({ tenantId, accountId, conversationId: conversation._id })
-          .sort({ timestamp: 1, _id: 1 }).limit(1).next()
+        db.collection('messages').findOne({ tenantId, accountId, conversationId: conversation._id,
+          waMessageId: { $type: 'string', $ne: '' }, timestamp: { $type: 'date' } },
+        { sort: { timestamp: -1, _id: -1 }, projection: { waMessageId: 1, raw: 1, direction: 1, timestamp: 1 } })
       ]);
-      if (!oldest) return null;
+      if (!anchor) continue;
       const contactWaId = contact?.['waId'];
-      const raw = oldest?.['raw'];
+      const raw = anchor['raw'];
       const storedRemoteJid = raw && typeof raw === 'object' && 'remoteJid' in raw && typeof raw['remoteJid'] === 'string'
         ? raw['remoteJid'] : undefined;
       const contactLid = contact?.['lid'];
       const jid = storedRemoteJid ?? (typeof contactLid === 'string' ? contactLid : contactWaId);
-      const messageId = oldest?.['waMessageId'];
-      const timestamp = oldest?.['timestamp'];
+      const messageId = anchor['waMessageId'];
+      const timestamp = anchor['timestamp'];
       const timestampMs = timestamp instanceof Date ? timestamp.getTime() : Number.NaN;
-      if (typeof jid !== 'string' || typeof messageId !== 'string' ||
-        typeof oldest?.['direction'] !== 'string' || !Number.isFinite(timestampMs)) return null;
-      return { jid, oldestMessageId: messageId, fromMe: oldest['direction'] === 'out', timestampMs };
-    }));
-    const available = targets.filter((target): target is HistorySyncTarget => target !== null && target.jid !== 'status@broadcast');
-    if (available.length === 0) throw new Error('NO_HISTORY_TARGETS');
-    return available;
+      if (typeof jid !== 'string' || jid === 'status@broadcast' || typeof messageId !== 'string' ||
+        typeof anchor['direction'] !== 'string' || !Number.isFinite(timestampMs) || timestampMs <= 0) continue;
+      targets.push({ jid, oldestMessageId: messageId, fromMe: anchor['direction'] === 'out', timestampMs });
+    }
+    return targets;
   }
 }

@@ -19,7 +19,9 @@ Sign in using the owner email and password. The app opens the inbox after sign-i
 
 Open **أرقام واتساب** to add a Baileys or Cloud API number. The creator receives `manage` membership. Connect a Baileys number and scan the QR from the account modal; Cloud API uses a configured token and signed webhook. Members can be granted `view`, `reply`, or `manage` access by user ID; role permission and membership must both allow an action. Status and QR events use `/realtime` Socket.IO. QR is sent only to managers. A membership change immediately updates the user's rooms and permission state. The owner/admin `accounts:access_all` permission gives access to every number in that tenant.
 
-Number managers can use **مسح الدردشات وإعادة استيرادها** on a connected Baileys number. It deletes that number's conversations, messages, and media, logs the linked session out, then starts a fresh QR pairing for full-history sync. Scan the new QR code to begin importing. WhatsApp only returns history it still offers; the action cannot guarantee recovery of expired or unavailable messages. Tenant contacts remain stored because they can be shared by multiple numbers.
+Number managers can use **مزامنة الرسائل** on a connected Baileys number to fetch older messages for known chats that have a saved WhatsApp message. The worker requests successive pages and adds the history WhatsApp returns without deleting existing records. Keep the primary phone online while the request runs. The result depends on the history WhatsApp makes available to the linked device.
+
+**مسح الدردشات وإعادة استيرادها** deletes that number's conversations, messages, and media, logs the linked session out, then starts a fresh QR pairing. Scan the new QR code to import the chats and messages WhatsApp offers at pairing. Tenant contacts remain stored because they can be shared by multiple numbers.
 
 **حذف الرقم** permanently removes that number and its conversations, messages, stored media, and calls from Hala CRM after the WhatsApp session stops. The confirmation dialog warns that this cannot be undone. Shared tenant contacts and mandatory audit records remain.
 

@@ -1857,7 +1857,7 @@ export class AccountsComponent implements OnInit {
     try {
       await this.accounts.syncHistory(id);
       this.error.set('');
-      this.notice.set('بدأ طلب استيراد سجل الرسائل من الهاتف. ستظهر المحادثات تدريجياً.');
+      this.notice.set('أُرسل طلب جلب الرسائل الأقدم للمحادثات المعروفة. ستظهر الرسائل التي يتيحها واتساب تدريجيًا.');
     } catch {
       this.error.set('تعذر طلب سجل الرسائل. تأكد من اتصال الرقم ثم حاول مجدداً.');
     } finally {

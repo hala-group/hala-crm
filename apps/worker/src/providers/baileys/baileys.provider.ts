@@ -1,18 +1,21 @@
-import makeWASocket, { areJidsSameUser, Browsers, BufferJSON, decryptPollVote, DisconnectReason, downloadHistory, extractMessageContent, jidNormalizedUser,
-  getKeyAuthor, makeCacheableSignalKeyStore, processHistoryMessage, proto, type AnyMessageContent, type CacheStore, type WASocket, type WAMessage, type WAMessageKey } from '@whiskeysockets/baileys';
+import makeWASocket, { areJidsSameUser, Browsers, BufferJSON, decryptPollVote, DisconnectReason, extractMessageContent, jidNormalizedUser,
+  getKeyAuthor, makeCacheableSignalKeyStore, proto, type AnyMessageContent, type CacheStore, type WASocket, type WAMessage, type WAMessageKey } from '@whiskeysockets/baileys';
 import { Logger } from '@nestjs/common';
 import { type Connection, Types } from 'mongoose';
 import { type ProviderAccount, type ProviderCapability, type ProviderEvent, type ProviderSession, type ProviderMessageKey, type ProviderSendRequest, type HistorySyncTarget, type NormalizedInboundMessage, BAILEYS_CAPABILITIES, type WhatsAppProvider } from '@hala/shared';
 import { EncryptedAuthStateStore } from './auth-state.store.js';
 import { normalizeBaileysMessage } from './normalize-message.js';
 import { InitialHistorySync } from './initial-history-sync.js';
-import { chatReadStateFromUpdate, contactFromChat, contactsFromHistoryMappings } from './chat-contact.js';
+import { chatReadStateFromUpdate, contactFromChat } from './chat-contact.js';
+import { type HistoryBatch, pageHistory, supplementalHistory } from './history.js';
 import { downloadBaileysMedia } from './media-downloader.js';
 
 export class BaileysProvider implements WhatsAppProvider {
   readonly name = 'baileys';
   readonly capabilities: ReadonlySet<ProviderCapability> = new Set(BAILEYS_CAPABILITIES);
   private readonly sockets = new Map<string, WASocket>();
+  private readonly historySessions = new WeakMap<WASocket, AbortSignal>();
+  private readonly importingHistory = new WeakSet<WASocket>();
   private readonly initialHistory = new InitialHistorySync();
   private readonly polls = new Map<string, { creatorJid: string; secret: Uint8Array; options: { id: string; text: string }[] }>();
   private readonly messageCache = new Map<string, proto.IMessage>();
@@ -20,7 +23,8 @@ export class BaileysProvider implements WhatsAppProvider {
   private readonly logger = new Logger(BaileysProvider.name);
   constructor(
     private readonly auth: EncryptedAuthStateStore,
-    private readonly connection?: Connection
+    private readonly connection?: Connection,
+    private readonly shutdown?: AbortSignal
   ) {}
 
   private cacheKey(accountId: string, id: string): string {
@@ -118,8 +122,18 @@ export class BaileysProvider implements WhatsAppProvider {
 
   async open(account: ProviderAccount, fencingToken: number, emit: (event: ProviderEvent) => Promise<void>): Promise<ProviderSession> {
     const { state, saveCreds } = await this.auth.load(account, fencingToken);
-    this.initialHistory.useFullHistory(account.id, Boolean(state.creds.me || state.creds.account));
-    this.logger.log(`Requesting initial WhatsApp history for account ${account.id}`);
+    const syncFullHistory = this.initialHistory.useFullHistory(account.id, Boolean(state.creds.me || state.creds.account));
+    if (syncFullHistory) this.logger.log(`Requesting initial WhatsApp history for account ${account.id}`);
+    const historySession = new AbortController();
+    let historyWrites = Promise.resolve();
+    let credentialsWrite = Promise.resolve();
+    const importHistory = (load: () => Promise<HistoryBatch>): void => {
+      historyWrites = historyWrites.then(async () => {
+        if (historySession.signal.aborted) return;
+        const history = await load();
+        await this.processHistoryData(history, account, emit, historySession.signal, socket.user?.id);
+      }).catch(() => this.logger.error(`WhatsApp history batch failed for account ${account.id}`));
+    };
     const socket = makeWASocket({
       auth: {
         creds: state.creds,
@@ -127,27 +141,29 @@ export class BaileysProvider implements WhatsAppProvider {
       },
       browser: Browsers.ubuntu('Hala CRM'),
       printQRInTerminal: false,
-      syncFullHistory: true,
+      syncFullHistory,
       msgRetryCounterCache: this.getRetryCache(account.id),
       getMessage: async (key: proto.IMessageKey) => {
         if (!key.id) return undefined;
         return this.getMessage(account.id, key.id);
       },
       shouldSyncHistoryMessage: message => {
-        if (message.mediaKey && message.directPath) {
-          void this.importHistoryMappings(message, account, emit, socket?.user?.id ?? state.creds.me?.id)
-            .catch(() => this.logger.warn('History phone mapping import failed'));
+        if (message.initialHistBootstrapInlinePayload?.length || (message.mediaKey && message.directPath)) {
+          importHistory(() => supplementalHistory(message, historySession.signal));
         }
         return true;
       }
     });
     this.sockets.set(account.id, socket);
+    this.historySessions.set(socket, historySession.signal);
     const notify = (event: ProviderEvent): void => { void emit(event).catch(() => this.logger.warn('Session event rejected')); };
     const publishContact = (contact: { id?: string; lid?: string; jid?: string; name?: string; notify?: string }): void => {
       if (contact.id) notify({ type: 'wa.contact', accountId: account.id, tenantId: account.tenantId,
         contact: { id: contact.id, lid: contact.lid, jid: contact.jid, name: contact.name, notify: contact.notify } });
     };
-    socket.ev.on('creds.update', () => { void saveCreds().catch(() => this.logger.warn('Credential write rejected')); });
+    socket.ev.on('creds.update', () => {
+      credentialsWrite = credentialsWrite.then(saveCreds).catch(() => this.logger.warn('Credential write rejected'));
+    });
     socket.ev.on('connection.update', update => {
       if (update.qr) {
         this.logger.log(`WhatsApp QR code generated for account ${account.id}`);
@@ -169,6 +185,7 @@ export class BaileysProvider implements WhatsAppProvider {
         })();
       }
       if (update.connection === 'close') {
+        historySession.abort();
         const code = (update.lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode;
         this.logger.log(`WhatsApp connection closed for account ${account.id} with status code ${code}`);
         if (code === DisconnectReason.loggedOut) {
@@ -197,10 +214,7 @@ export class BaileysProvider implements WhatsAppProvider {
       }
     });
     socket.ev.on('messaging-history.set', history => {
-      this.logger.log(`WhatsApp history sync returned ${history.messages.length} messages`);
-      this.initialHistory.historyReceived(account.id, history.messages.length);
-      void this.processHistoryData(history, account, emit, socket.user?.id)
-        .catch(() => this.logger.error('History import failed'));
+      importHistory(async () => history);
     });
     socket.ev.on('contacts.upsert', contacts => { for (const contact of contacts) publishContact(contact); });
     socket.ev.on('contacts.update', contacts => { for (const contact of contacts) publishContact(contact); });
@@ -273,10 +287,12 @@ export class BaileysProvider implements WhatsAppProvider {
       }
     });
     return { close: async () => {
+      historySession.abort();
       if (this.sockets.get(account.id) === socket) this.sockets.delete(account.id);
       this.clearPolls(account.id);
       this.retryCaches.delete(account.id);
       socket.end(undefined);
+      await Promise.all([credentialsWrite, historyWrites]);
     } };
   }
 
@@ -341,277 +357,76 @@ export class BaileysProvider implements WhatsAppProvider {
   }
 
   private async processHistoryData(
-    history: { chats: proto.IConversation[]; contacts: { id: string; name?: string; notify?: string; verifiedName?: string; lid?: string; jid?: string }[]; messages: proto.IWebMessageInfo[] },
+    history: HistoryBatch,
     account: ProviderAccount,
     emit: (event: ProviderEvent) => Promise<void>,
+    signal: AbortSignal,
     ownJid?: string
   ): Promise<void> {
-    for (const message of history.messages) {
-      if (message.key.id && message.message) {
-        this.cacheMessage(account.id, message.key.id, message.message);
-        void this.saveRawMessageToDb(account.id, message.key.id, message.message);
-      }
-    }
-    // Persist directly to MongoDB to ensure data safety regardless of Redis/WebSocket state
-    if (this.connection?.db) {
+    if (!history.chats.length && !history.contacts.length && !history.messages.length) return;
+    const { id: accountId, tenantId } = account;
+    let failed = 0;
+    const publish = async (event: ProviderEvent): Promise<void> => {
+      if (signal.aborted) return;
       try {
-        await this.persistHistoryToDb(history, account, ownJid);
-      } catch (error) {
-        this.logger.error(`Direct DB history persistence error: ${(error as Error).message}`);
+        await emit(event);
+      } catch {
+        failed++;
       }
-    }
-
-    for (const chat of history.chats) {
-      const contact = contactFromChat(chat);
-      if (contact) await emit({ type: 'wa.contact', accountId: account.id, tenantId: account.tenantId, contact });
-      const readState = chatReadStateFromUpdate(chat);
-      if (readState) {
-        await emit({ type: 'wa.chat.read_state', accountId: account.id, tenantId: account.tenantId, ...readState });
-      }
-    }
+    };
     for (const contact of history.contacts) {
-      if (contact.id) {
-        await emit({
-          type: 'wa.contact',
-          accountId: account.id,
-          tenantId: account.tenantId,
-          contact: { id: contact.id, lid: contact.lid, jid: contact.jid, name: contact.name, notify: contact.notify }
-        });
-      }
+      if (signal.aborted) return;
+      if (contact.id) await publish({ type: 'wa.contact', accountId, tenantId, contact });
     }
-    for (const message of history.messages) this.rememberPoll(account.id, message, ownJid);
-    for (const message of history.messages) {
-      const normalized = this.normalizeMessage(account.id, account.tenantId, message, ownJid);
-      if (normalized) {
-        await emit({
-          type: 'wa.message.in',
-          accountId: account.id,
-          tenantId: account.tenantId,
-          message: { ...normalized, history: true }
-        });
-      }
-    }
-  }
-
-  private async persistHistoryToDb(
-    history: { chats: proto.IConversation[]; contacts: { id: string; name?: string; notify?: string; verifiedName?: string; lid?: string; jid?: string }[]; messages: proto.IWebMessageInfo[] },
-    account: ProviderAccount,
-    ownJid?: string
-  ): Promise<void> {
-    if (!this.connection?.db) return;
-    const db = this.connection.db;
-    const tenantId = new Types.ObjectId(account.tenantId);
-    const accountId = new Types.ObjectId(account.id);
-    const now = new Date();
-
-    const contactsColl = db.collection('contacts');
-    const convsColl = db.collection('conversations');
-    const msgsColl = db.collection('messages');
-
-    // 1. Process contacts from history.contacts and history.chats
-    const contactEntries = [
-      ...history.contacts,
-      ...history.chats.map(chat => ({
-        id: chat.id ?? '',
-        name: chat.name ?? undefined,
-        lid: chat.lidJid ?? undefined,
-        jid: chat.pnJid ?? undefined
-      }))
-    ];
-
-    for (const c of contactEntries) {
-      if (!c.id) continue;
-      const isGroup = c.id.endsWith('@g.us');
-      const lid = [c.lid, c.id].find(id => id?.endsWith('@lid'));
-      const jid = [c.jid, c.id].find(id => id?.endsWith('@s.whatsapp.net'));
-      const waId = isGroup ? c.id : (lid ?? jid ?? c.id);
-      if (!waId) continue;
-      const isSelf = Boolean(ownJid && (areJidsSameUser(waId, ownJid) || (lid && areJidsSameUser(lid, ownJid)) || (jid && areJidsSameUser(jid, ownJid))));
-      const name = isSelf ? 'أنت (رسائل شخصية)' : (c.name?.trim() || (c as { verifiedName?: string }).verifiedName?.trim());
-      const notify = isSelf ? 'أنت' : (c as { notify?: string }).notify?.trim();
-      const phone = jid?.match(/^([1-9][0-9]{5,15})@s\.whatsapp\.net$/);
-      const fields = {
-        ...(name ? { displayName: name } : {}),
-        ...(notify && !isGroup ? { pushName: notify } : {}),
-        ...(phone ? { phoneE164: `+${phone[1]}` } : {}),
-        ...(isSelf ? { isSelf: true } : {}),
-        updatedAt: now
-      };
-      await contactsColl.updateOne(
-        { tenantId, waId },
-        { $set: fields, $setOnInsert: { createdAt: now, isGroup, tags: [], customFields: {} } },
-        { upsert: true }
-      );
-    }
-
-    // 2. Fetch contacts for lookup
-    const allContacts = await contactsColl.find({ tenantId }).toArray();
-    const contactByWaId = new Map<string, Record<string, unknown>>();
-    for (const c of allContacts) {
-      if (typeof c['waId'] === 'string') contactByWaId.set(c['waId'], c);
-      if (typeof c['lid'] === 'string') contactByWaId.set(c['lid'], c);
-    }
-
-    // 2.5. Ensure all chats in history.chats have conversations created
     for (const chat of history.chats) {
-      if (!chat.id) continue;
-      const isGroup = chat.id.endsWith('@g.us');
-      const lid = [chat.lidJid, chat.id].find(id => id?.endsWith('@lid'));
-      const jid = [chat.pnJid, chat.id].find(id => id?.endsWith('@s.whatsapp.net'));
-      const waId = isGroup ? chat.id : (lid ?? jid ?? chat.id);
-      if (!waId) continue;
-      const contact = contactByWaId.get(waId) ?? (lid ? contactByWaId.get(lid) : undefined) ?? (jid ? contactByWaId.get(jid) : undefined);
+      if (signal.aborted) return;
+      const contact = contactFromChat(chat);
       if (!contact) continue;
-
-      const contactId = contact['_id'] as Types.ObjectId;
-      const conversationFilter = { tenantId, accountId, contactId };
-      const chatTimestamp = chat.conversationTimestamp
-        ? new Date(Number(chat.conversationTimestamp) * 1000)
-        : now;
-      const unread = Number(chat.unreadCount ?? 0);
-
-      await convsColl.updateOne(conversationFilter, {
-        $setOnInsert: {
-          status: 'open',
-          unreadCount: Math.max(unread, 0),
-          lastMessageAt: chatTimestamp,
-          lastMessagePreview: '',
-          lastMessageType: 'text',
-          lastMessageDirection: 'in',
-          createdAt: now,
-          updatedAt: now
-        }
-      }, { upsert: true });
+      const timestampMs = Number(chat.conversationTimestamp ?? chat.lastMsgTimestamp) * 1000;
+      const historyChat = history.syncType !== proto.HistorySync.HistorySyncType.ON_DEMAND
+        ? { timestamp: new Date(Number.isFinite(timestampMs) && timestampMs > 0 ? timestampMs : 0),
+          unreadCount: Math.max(chat.unreadCount ?? 0, 0) }
+        : undefined;
+      await publish({ type: 'wa.contact', accountId, tenantId, contact, historyChat });
     }
-
-    // 3. Process messages into conversations and messages collections
     for (const message of history.messages) {
-      const normalized = this.normalizeMessage(account.id, account.tenantId, message, ownJid);
-      if (!normalized) continue;
-
-      let contact = contactByWaId.get(normalized.waId);
-      if (!contact && normalized.lid) contact = contactByWaId.get(normalized.lid);
-      if (!contact) {
-        const waId = normalized.waId;
-        const isGroup = normalized.isGroup;
-        await contactsColl.updateOne(
-          { tenantId, waId },
-          {
-            $set: {
-              ...(normalized.pushName ? { pushName: normalized.pushName } : {}),
-              ...(normalized.phoneE164 ? { phoneE164: normalized.phoneE164 } : {}),
-              ...(normalized.isSelf ? { isSelf: true, displayName: 'أنت (رسائل شخصية)' } : {}),
-              updatedAt: now
-            },
-            $setOnInsert: { createdAt: now, isGroup, tags: [], customFields: {} }
-          },
-          { upsert: true }
-        );
-        const inserted = await contactsColl.findOne({ tenantId, waId });
-        if (inserted) {
-          contact = inserted;
-          contactByWaId.set(waId, contact);
-          if (typeof contact['lid'] === 'string') contactByWaId.set(contact['lid'], contact);
+      if (message?.key?.id) this.rememberPoll(accountId, message, ownJid);
+    }
+    for (const message of history.messages) {
+      if (signal.aborted) return;
+      if (!message?.key?.id) continue;
+      try {
+        const normalized = this.normalizeMessage(accountId, tenantId, message, ownJid);
+        if (!normalized) continue;
+        if (message.message) {
+          this.cacheMessage(accountId, message.key.id, message.message);
+          await this.saveRawMessageToDb(accountId, message.key.id, message.message);
         }
-      }
-      if (!contact) continue;
-
-      const contactId = contact['_id'] as Types.ObjectId;
-      const conversationFilter = { tenantId, accountId, contactId };
-      const preview = normalized.text?.trim() || normalized.caption?.trim() || '';
-      const visibleMessage = normalized.type !== 'system' && normalized.type !== 'reaction';
-      const initialMessageType = normalized.type === 'system' ? 'text' : normalized.type;
-
-      await convsColl.updateOne(conversationFilter, {
-        $setOnInsert: {
-          status: 'open',
-          unreadCount: 0,
-          lastMessageAt: normalized.timestamp,
-          lastMessagePreview: preview,
-          lastMessageType: initialMessageType,
-          lastMessageDirection: normalized.direction,
-          createdAt: now,
-          updatedAt: now
-        }
-      }, { upsert: true });
-
-      const conv = await convsColl.findOne(conversationFilter);
-      if (!conv) continue;
-
-      const messageFilter = { tenantId, accountId, waMessageId: normalized.waMessageId };
-      await msgsColl.updateOne(messageFilter, {
-        $setOnInsert: {
-          tenantId, accountId, conversationId: conv['_id'] as Types.ObjectId, contactId,
-          waMessageId: normalized.waMessageId, direction: normalized.direction, type: normalized.type,
-          text: normalized.text, caption: normalized.caption, location: normalized.location,
-          contacts: normalized.contacts, poll: normalized.poll, pollVote: normalized.pollVote,
-          interactive: normalized.interactive, template: normalized.template, reaction: normalized.reaction,
-          quotedWaMessageId: normalized.quotedWaMessageId, mentions: normalized.mentions,
-          forwarded: normalized.forwarded, raw: normalized.raw, timestamp: normalized.timestamp,
-          status: normalized.direction === 'out' ? 'sent' : 'delivered', statusHistory: [],
-          createdAt: now, updatedAt: now
-        }
-      }, { upsert: true });
-
-      if (visibleMessage) {
-        await convsColl.updateOne(
-          { ...conversationFilter, $or: [{ lastMessageType: 'system' }, { lastMessageAt: { $lte: normalized.timestamp } }] },
-          {
-            $set: {
-              lastMessageAt: normalized.timestamp,
-              lastMessagePreview: preview,
-              lastMessageType: normalized.type,
-              lastMessageDirection: normalized.direction,
-              updatedAt: now
-            }
-          }
-        );
+        await publish({ type: 'wa.message.in', accountId, tenantId, message: { ...normalized, history: true } });
+      } catch {
+        failed++;
       }
     }
-    this.logger.log(`Direct DB history persistence completed for account ${account.id}: stored contacts, conversations, and messages`);
-  }
-
-  private async importHistoryMappings(
-    notification: proto.Message.IHistorySyncNotification,
-    account: ProviderAccount,
-    emit: (event: ProviderEvent) => Promise<void>,
-    ownJid?: string
-  ): Promise<void> {
-    const history = await downloadHistory(notification, {});
-    const contacts = contactsFromHistoryMappings(history.phoneNumberToLidMappings ?? []);
-    this.logger.log(`WhatsApp history supplied ${contacts.length} phone mappings`);
-    for (const contact of contacts) {
-      await emit({ type: 'wa.contact', accountId: account.id, tenantId: account.tenantId, contact });
-    }
-    try {
-      // Ensure every message in every conversation has remoteJid populated
-      for (const conv of history.conversations ?? []) {
-        const chatId = conv.id;
-        if (!chatId) continue;
-        for (const item of conv.messages ?? []) {
-          if (item.message?.key && !item.message.key.remoteJid) {
-            item.message.key.remoteJid = chatId;
-          }
-        }
-      }
-      const processed = processHistoryMessage(history);
-      this.logger.log(`Direct history processing extracted ${processed.chats.length} chats and ${processed.messages.length} messages`);
-      await this.processHistoryData(processed, account, emit, ownJid);
-    } catch (error) {
-      this.logger.warn(`Direct history processing failed: ${(error as Error).message}`);
-    }
+    this.initialHistory.historyReceived(accountId, history.messages.length);
+    this.logger.log(`WhatsApp history batch for account ${accountId}: ${history.chats.length} chats, ${history.messages.length} messages, ${failed} failed events`);
   }
 
   async syncHistory(account: ProviderAccount, targets: HistorySyncTarget[]): Promise<number> {
     const socket = this.socket(account);
-    for (const target of targets) {
-      await socket.fetchMessageHistory(100, {
-        remoteJid: target.jid, id: target.oldestMessageId, fromMe: target.fromMe
-      }, target.timestampMs);
-      await new Promise(resolve => setTimeout(resolve, 250));
+    const session = this.historySessions.get(socket);
+    if (!session || session.aborted) throw new Error('ACCOUNT_NOT_RUNNING');
+    const signal = this.shutdown ? AbortSignal.any([session, this.shutdown]) : session;
+    if (this.importingHistory.has(socket)) return 0;
+    this.importingHistory.add(socket);
+    try {
+      this.logger.log(`Requesting older WhatsApp history for ${targets.length} conversations`);
+      let failed = 0;
+      const received = await pageHistory(socket, targets, signal, () => { failed++; });
+      this.logger.log(`WhatsApp history for account ${account.id}: ${received} page responses, ${failed} failed requests`);
+      return received;
+    } finally {
+      this.importingHistory.delete(socket);
     }
-    this.logger.log(`Requested older WhatsApp history for ${targets.length} conversations`);
-    return targets.length;
   }
 
   async downloadMedia(account: ProviderAccount, inbound: NormalizedInboundMessage): Promise<Buffer> {

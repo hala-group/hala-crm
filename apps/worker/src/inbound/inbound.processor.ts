@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { type Connection, Types } from 'mongoose';
 import sharp from 'sharp';
 import { contactDisplayName, normalizedInboundSchema, type DomainEvent, type MediaSource, type MessageMutation, type MessageView,
-  type NormalizedInboundMessage, type ProviderContact } from '@hala/shared';
+  type NormalizedInboundMessage, type ProviderEvent } from '@hala/shared';
 import { type StorageDriver, type StoragePort } from '@hala/shared/storage';
 
 interface Dependencies {
@@ -22,7 +22,7 @@ interface PendingMutation {
 export class InboundProcessor {
   constructor(private readonly deps: Dependencies) {}
 
-  async syncContact(event: { tenantId: string; accountId: string; contact: ProviderContact }): Promise<void> {
+  async syncContact(event: Omit<Extract<ProviderEvent, { type: 'wa.contact' }>, 'type'>): Promise<void> {
     const { contact } = event;
     const isGroup = contact.id.endsWith('@g.us');
     const lid = [contact.lid, contact.id].find(id => id?.endsWith('@lid'));
@@ -53,6 +53,18 @@ export class InboundProcessor {
       else await contacts.updateOne({ tenantId, waId: lid }, { $set: { lid } });
     }
     const matched = existing.length ? existing : await contacts.find({ tenantId, waId: lid ?? jid ?? contact.id }).toArray();
+    if (event.historyChat) {
+      const owner = matched.find(item => lid && item['lid'] === lid) ??
+        matched.find(item => item['waId'] === (lid ?? jid ?? contact.id)) ?? matched[0];
+      if (owner) {
+        const now = new Date();
+        await db.collection('conversations').updateOne({ tenantId, accountId, contactId: owner._id }, {
+          $setOnInsert: { status: 'open', unreadCount: event.historyChat.unreadCount,
+            lastMessageAt: event.historyChat.timestamp, lastMessagePreview: '', lastMessageType: 'text',
+            lastMessageDirection: 'in', createdAt: now, updatedAt: now }
+        }, { upsert: true });
+      }
+    }
     for (const item of matched) {
       const conversations = await db.collection('conversations').find({ tenantId, accountId, contactId: item._id }).toArray();
       for (const conversation of conversations) {
@@ -182,6 +194,9 @@ export class InboundProcessor {
     const conversationFilter = { tenantId, accountId, contactId: contact._id };
     const preview = data.text?.trim() || data.caption?.trim() || '';
     const visibleMessage = data.type !== 'system' && data.type !== 'reaction';
+    const canUpdatePreview = { ...conversationFilter, $or: [{ lastMessageType: 'system' },
+      { lastMessageAt: { $lte: data.timestamp } },
+      ...(data.history ? [{ lastMessageType: 'text', lastMessagePreview: '' }] : [])] };
     await conversations.updateOne(conversationFilter, { $setOnInsert: {
       status: 'open', unreadCount: 0, lastMessageAt: data.timestamp, lastMessagePreview: preview,
       lastMessageType: data.type, lastMessageDirection: data.direction, createdAt: now, updatedAt: now
@@ -220,8 +235,7 @@ export class InboundProcessor {
       !message['text'] && !message['caption'] && !message['mediaId']) {
       await messages.updateOne({ ...messageFilter, text: { $in: [null, ''] }, caption: { $in: [null, ''] }, mediaId: null },
         { $set: { type: data.type, text: data.text, caption: data.caption, raw: data.raw, updatedAt: now } });
-      if (visibleMessage) await conversations.updateOne({ ...conversationFilter,
-        $or: [{ lastMessageType: 'system' }, { lastMessageAt: { $lte: data.timestamp } }] },
+      if (visibleMessage) await conversations.updateOne(canUpdatePreview,
       { $set: { lastMessageAt: data.timestamp, lastMessageDirection: data.direction,
         lastMessageType: data.type, lastMessagePreview: preview, updatedAt: now } });
     }
@@ -239,17 +253,17 @@ export class InboundProcessor {
     if (insert.upsertedCount) {
       await conversations.updateOne(conversationFilter, {
         ...(visibleMessage && data.direction === 'in' && !data.history ? { $inc: { unreadCount: 1 } } : {}),
-        $set: { updatedAt: now, ...(visibleMessage && data.direction === 'in' ? { status: 'open' } : {}) }
+        $set: { updatedAt: now, ...(visibleMessage && data.direction === 'in' && !data.history ? { status: 'open' } : {}) }
       });
-      if (visibleMessage) await conversations.updateOne({ ...conversationFilter,
-        $or: [{ lastMessageType: 'system' }, { lastMessageAt: { $lte: data.timestamp } }] }, { $set: {
+      if (visibleMessage) await conversations.updateOne(canUpdatePreview, { $set: {
         lastMessageAt: data.timestamp, lastMessagePreview: preview, lastMessageType: data.type,
         lastMessageDirection: data.direction,
         lastMessageStatus: data.direction === 'out' ? 'sent' : undefined
       } });
       const latest = await conversations.findOne(conversationFilter);
       const assignedUserId = latest?.['assignedUserId']?.toString() ?? null;
-      if (visibleMessage && !data.history) await this.deps.publish({ type: 'message.created', tenantId: data.tenantId, accountId: data.accountId,
+      if (visibleMessage) await this.deps.publish({ type: data.history ? 'message.updated' : 'message.created',
+        tenantId: data.tenantId, accountId: data.accountId,
         conversationId: conversation._id.toString(), assignedUserId,
         message: { _id: message._id.toString(), tenantId: data.tenantId, accountId: data.accountId,
           conversationId: conversation._id.toString(), contactId: contact._id.toString(), waMessageId: data.waMessageId,

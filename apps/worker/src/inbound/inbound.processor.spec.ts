@@ -181,6 +181,28 @@ describe('inbound persistence', () => {
     expect(events.filter(event => event.type === 'message.created')).toHaveLength(alerts);
   });
 
+  it('imports a chat snapshot once and keeps archived chats archived when older messages arrive', async () => {
+    const db = connection.db!;
+    const waId = '201001112229@s.whatsapp.net';
+    const scope = { tenantId: tenantId.toString(), accountId: accountId.toString() };
+    const historyChat = { timestamp: new Date('2026-02-01T00:00:00Z'), unreadCount: 2 };
+    const snapshot = { ...scope, contact: { id: waId, name: 'History contact' }, historyChat };
+    await processor.syncContact(snapshot);
+    const contact = await db.collection('contacts').findOne({ tenantId, waId });
+    const conversations = db.collection('conversations');
+    const filter = { tenantId, accountId, contactId: contact?._id };
+    expect(await conversations.countDocuments(filter)).toBe(1);
+    await conversations.updateOne(filter, { $set: { status: 'archived', unreadCount: 0 } });
+    await processor.syncContact(snapshot);
+    await processor.process({ ...scope, waId, waMessageId: 'history-archived', isGroup: false, direction: 'in',
+      text: 'Restored message', type: 'text', history: true, timestamp: new Date('2026-01-01T00:00:00Z') });
+    expect(await conversations.findOne(filter)).toMatchObject({
+      status: 'archived', unreadCount: 0, lastMessagePreview: 'Restored message'
+    });
+    expect(events).toContainEqual(expect.objectContaining({ type: 'message.updated',
+      message: expect.objectContaining({ waMessageId: 'history-archived' }) }));
+  });
+
   it('syncs read and marked-unread state from another WhatsApp device', async () => {
     const chatId = '201008888888@s.whatsapp.net';
     const tenant = tenantId.toString();
