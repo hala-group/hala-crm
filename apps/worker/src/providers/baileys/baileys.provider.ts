@@ -441,26 +441,44 @@ export class BaileysProvider implements WhatsAppProvider {
     for (const message of history.messages) {
       if (message?.key?.id) this.rememberPoll(accountId, message, ownJid);
     }
+    const messagesByChat = new Map<string, WAMessage[]>();
     for (const message of history.messages) {
-      if (signal.aborted) return;
       if (!message?.key?.id) continue;
-      try {
-        const normalized = this.normalizeMessage(accountId, tenantId, message, ownJid);
-        if (!normalized) continue;
-        if (message.message) {
-          this.cacheMessage(accountId, message.key.id, message.message);
-          await this.saveRawMessageToDb(accountId, message.key.id, message.message);
-        }
-        if (await publish({ type: 'wa.message.in', accountId, tenantId, message: { ...normalized, history: true } })) {
-          processed++;
-          if (processed === 1 || processed % 250 === 0) {
-            this.logger.log(`WhatsApp history progress for account ${accountId}: ${processed}/${history.messages.length} messages processed`);
+      const chatId = message.key.remoteJid ?? message.key.participant ?? message.key.id;
+      const messages = messagesByChat.get(chatId) ?? [];
+      messages.push(message);
+      messagesByChat.set(chatId, messages);
+    }
+    const chatMessages = [...messagesByChat.values()];
+    let nextChat = 0;
+    const processNextChat = async (): Promise<void> => {
+      while (!signal.aborted) {
+        const messages = chatMessages[nextChat++];
+        if (!messages) return;
+        for (const message of messages) {
+          if (signal.aborted) return;
+          const id = message.key.id;
+          if (!id) continue;
+          try {
+            const normalized = this.normalizeMessage(accountId, tenantId, message, ownJid);
+            if (!normalized) continue;
+            if (message.message) {
+              this.cacheMessage(accountId, id, message.message);
+              await this.saveRawMessageToDb(accountId, id, message.message);
+            }
+            if (await publish({ type: 'wa.message.in', accountId, tenantId, message: { ...normalized, history: true } })) {
+              processed++;
+              if (processed === 1 || processed % 250 === 0) {
+                this.logger.log(`WhatsApp history progress for account ${accountId}: ${processed}/${history.messages.length} messages processed`);
+              }
+            }
+          } catch {
+            failed++;
           }
         }
-      } catch {
-        failed++;
       }
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(8, chatMessages.length) }, processNextChat));
     this.initialHistory.historyReceived(accountId, history.messages.length);
     this.logger.log(`WhatsApp history batch for account ${accountId}: ${history.chats.length} chats, ${processed}/${history.messages.length} messages processed, ${failed} failed events`);
   }

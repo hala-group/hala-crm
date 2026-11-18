@@ -42,6 +42,40 @@ it('persists a decoded history event while the raw download is still open', asyn
   }
 });
 
+it('imports different chats concurrently while preserving each chat message order', async () => {
+  const account = { id: new Types.ObjectId().toString(), tenantId: new Types.ObjectId().toString() };
+  const auth = { load: vi.fn().mockResolvedValue({ state: { creds: initAuthCreds(), keys: { get: vi.fn(), set: vi.fn() } },
+    saveCreds: vi.fn() }) };
+  const provider = new BaileysProvider(auth as unknown as EncryptedAuthStateStore);
+  const ev = new EventEmitter();
+  vi.mocked(makeWASocket).mockReturnValueOnce({ ev, end: vi.fn() } as unknown as WASocket);
+  const processed: string[] = [];
+  let releaseFirst = () => {};
+  const firstMessage = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const emit = vi.fn(async (event: ProviderEvent) => {
+    if (event.type !== 'wa.message.in') return;
+    processed.push(event.message.waMessageId);
+    if (event.message.waMessageId === 'first-message') await firstMessage;
+  });
+  const session = await provider.open(account, 1, emit);
+  try {
+    ev.emit('messaging-history.set', { chats: [], contacts: [],
+      syncType: proto.HistorySync.HistorySyncType.FULL, messages: [
+        { key: { id: 'first-message', remoteJid: '201111111111@s.whatsapp.net' }, message: { conversation: 'First' } },
+        { key: { id: 'second-message', remoteJid: '201111111111@s.whatsapp.net' }, message: { conversation: 'Second' } },
+        { key: { id: 'other-chat-message', remoteJid: '202222222222@s.whatsapp.net' }, message: { conversation: 'Other chat' } }
+      ] });
+    await vi.waitFor(() => expect(processed).toContain('other-chat-message'));
+    expect(processed).toEqual(['first-message', 'other-chat-message']);
+    releaseFirst();
+    await vi.waitFor(() => expect(processed).toContain('second-message'));
+    expect(processed.indexOf('first-message')).toBeLessThan(processed.indexOf('second-message'));
+  } finally {
+    releaseFirst();
+    await session.close();
+  }
+});
+
 it('replays recently accepted history notifications one batch at a time', async () => {
   const account = { id: new Types.ObjectId().toString(), tenantId: new Types.ObjectId().toString() };
   const creds = initAuthCreds();
