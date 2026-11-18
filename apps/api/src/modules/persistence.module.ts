@@ -9,6 +9,7 @@ import { accountSchema, accountMemberSchema, waAuthStateSchema } from './whatsap
 import { contactSchema, contactAvatarSchema, conversationSchema, messageSchema, mediaSchema } from './inbox/inbox.schema.js';
 import { callSchema } from './calls/call.schema.js';
 import { callPushSubscriptionSchema } from './calls/call-push.schema.js';
+import { messagePushInstallationSchema } from './message-push/message-push.schema.js';
 
 export const modelDefinitions = [
   { name: 'Tenant', schema: tenantSchema },
@@ -26,7 +27,8 @@ export const modelDefinitions = [
   { name: 'Message', schema: messageSchema },
   { name: 'Media', schema: mediaSchema },
   { name: 'Call', schema: callSchema },
-  { name: 'CallPushSubscription', schema: callPushSubscriptionSchema }
+  { name: 'CallPushSubscription', schema: callPushSubscriptionSchema },
+  { name: 'MessagePushInstallation', schema: messagePushInstallationSchema }
 ];
 
 @Module({

@@ -11,3 +11,13 @@ playwright-report
 test-results
 .tmp/
 *.log
+# Local diagnostics are not part of the runtime image.
+apps/api/check-*.mjs
+apps/api/create-target-convs.mjs
+apps/api/sample-conv.mjs
+apps/api/test-conv-list.mjs
+apps/api/test-live-api.mjs
+check_auth_keys.mjs
+check_conv_existence.mjs
+find_missing_contacts.mjs
+inspect_creds.mjs

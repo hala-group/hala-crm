@@ -9,4 +9,5 @@ export * from './outgoing.js';
 export * from './schemas/identity.js';
 export * from './schemas/conversations.js';
 export * from './schemas/call-push.js';
+export * from './schemas/message-push.js';
 export * from './schemas/cloud.js';

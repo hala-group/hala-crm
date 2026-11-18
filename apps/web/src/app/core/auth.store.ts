@@ -8,13 +8,14 @@ import { PermissionsStore } from './permissions.store';
 import { type Me } from './models';
 import { RealtimeService } from './realtime.service';
 import { CallAlertsStore } from './call-alerts.store';
+import { MessagePushStore } from './message-push.store';
 
 interface AuthResponse { accessToken: string; expiresIn: number }
 
 export const AuthStore = signalStore(
   { providedIn: 'root' },
   withState<{ accessToken: string | null; loading: boolean }>({ accessToken: null, loading: false }),
-  withMethods((store, http = inject(HttpClient), permissions = inject(PermissionsStore), router = inject(Router), realtime = inject(RealtimeService), callAlerts = inject(CallAlertsStore)) => {
+  withMethods((store, http = inject(HttpClient), permissions = inject(PermissionsStore), router = inject(Router), realtime = inject(RealtimeService), callAlerts = inject(CallAlertsStore), messagePush = inject(MessagePushStore)) => {
     let restorePromise: Promise<boolean> | null = null;
     const loadMe = async (): Promise<void> => {
       const me = await firstValueFrom(http.get<Me>('/api/v1/me'));
@@ -27,6 +28,7 @@ export const AuthStore = signalStore(
         await loadMe();
         realtime.start(response.accessToken);
         void callAlerts.syncSubscription();
+        void messagePush.initialize();
         return response.accessToken;
       } catch (error) {
         patchState(store, { accessToken: null });
@@ -50,10 +52,12 @@ export const AuthStore = signalStore(
           await loadMe();
           realtime.start(response.accessToken);
           void callAlerts.syncSubscription();
+          void messagePush.initialize();
           await router.navigateByUrl('/inbox');
         } finally { patchState(store, { loading: false }); }
       },
       async logout(): Promise<void> {
+        try { await messagePush.logout(); } catch { /* Continue ending the authenticated session. */ }
         try {
           await Promise.race([
             callAlerts.disableBrowserNotifications(),

@@ -31,9 +31,9 @@ export class CallPushService {
 
   async subscribe(principal: Principal, input: CallPushSubscriptionInput): Promise<{ ok: true }> {
     if (!this.configured) throw new ServiceUnavailableException('Call push is not configured');
-    await this.subscriptions.updateOne({ tenantId: new Types.ObjectId(principal.tenantId), endpoint: input.endpoint }, {
+    await runInTenant(principal.tenantId, () => this.subscriptions.updateOne({ endpoint: input.endpoint }, {
       $set: { userId: new Types.ObjectId(principal.id), keys: input.keys, expirationTime: input.expirationTime ?? null }
-    }, { upsert: true });
+    }, { upsert: true }).exec());
     return { ok: true };
   }
 

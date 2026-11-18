@@ -4,6 +4,7 @@ import { FormField, form } from '@angular/forms/signals';
 import { firstValueFrom } from 'rxjs';
 import { PermissionsStore } from '../../core/permissions.store';
 import { AccountsStore } from '../accounts/accounts.store';
+import { MessagePushStore } from '../../core/message-push.store';
 
 @Component({
   selector: 'hala-profile',
@@ -41,6 +42,26 @@ import { AccountsStore } from '../accounts/accounts.store';
       }
 
       <div class="profile-grid">
+        @if (permissions.can('conversations:read')) {
+          <div class="card">
+            <div class="card-header"><h2>إشعارات الرسائل</h2></div>
+            <div class="card-body">
+              <p class="section-desc">استقبل إشعارًا عند وصول رسالة جديدة إلى المحادثات المتاحة لك، حتى عند إغلاق التبويب.</p>
+              @if (!messagePush.available()) {
+                <p role="status">الإشعارات غير متاحة هنا. استخدم متصفحًا يدعم الإشعارات على الموقع الآمن.</p>
+              } @else if (!messagePush.configured()) {
+                <p role="status">لم تُجهّز إشعارات الرسائل بعد. تواصل مع مدير النظام.</p>
+              } @else {
+                <p role="status">{{ messagePush.enabled() ? 'إشعارات الرسائل مفعّلة على هذا الجهاز.' : 'إشعارات الرسائل متوقفة على هذا الجهاز.' }}</p>
+                <button class="btn-submit" type="button" [disabled]="messagePush.loading()"
+                  (click)="messagePush.enabled() ? messagePush.disable() : messagePush.enable()">
+                  {{ messagePush.loading() ? 'جارٍ تحديث الإعداد…' : messagePush.enabled() ? 'إيقاف إشعارات الرسائل' : 'تفعيل إشعارات الرسائل' }}
+                </button>
+              }
+              @if (messagePush.error()) { <p class="alert-error" role="alert">{{ messagePush.error() }}</p> }
+            </div>
+          </div>
+        }
         <!-- Account Info Card -->
         <div class="card info-card">
           <div class="card-header">
@@ -524,6 +545,7 @@ export class ProfileComponent implements OnInit {
   private readonly http = inject(HttpClient);
   readonly permissions = inject(PermissionsStore);
   readonly accounts = inject(AccountsStore);
+  readonly messagePush = inject(MessagePushStore);
 
   readonly user = computed(() => this.permissions.me());
   readonly loading = signal(false);

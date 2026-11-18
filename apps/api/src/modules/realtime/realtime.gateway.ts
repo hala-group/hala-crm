@@ -17,6 +17,7 @@ import { AccountAccessService } from '../access/account-access.service.js';
 import { RedisBusService } from '../access/redis-bus.service.js';
 import { CallsService } from '../calls/calls.service.js';
 import { CallPushService } from '../calls/call-push.service.js';
+import { MessagePushService } from '../message-push/message-push.service.js';
 
 interface Claims { sub: string; tenantId: string; sid: string; typ: string }
 
@@ -35,13 +36,17 @@ export class RealtimeGateway implements OnGatewayConnection, OnModuleDestroy {
     @Inject(AccountAccessService) private readonly access: AccountAccessService,
     @Inject(RedisBusService) private readonly bus: RedisBusService,
     @Inject(CallsService) private readonly calls: CallsService,
-    @Inject(CallPushService) private readonly callPush: CallPushService
+    @Inject(CallPushService) private readonly callPush: CallPushService,
+    @Inject(MessagePushService) private readonly messagePush: MessagePushService
   ) {
     this.stopListening = this.bus.listen(event => {
       if (event.type === 'access.changed') return this.refreshUser(event.userId, event.tenantId);
       else if (event.type === 'account.deleted') return this.removeDeletedAccount(event.accountId, event.tenantId);
       else if (event.type === 'call.incoming' || event.type === 'call.missed') return this.broadcastCall(event);
-      else if (event.type === 'message.created' || event.type === 'message.media_ready' || event.type === 'message.status' || event.type === 'message.updated' || event.type === 'conversation.updated' || event.type === 'typing') return this.broadcastDomainEvent(event);
+      else if (event.type === 'message.created') {
+        void this.messagePush.deliver(event);
+        return this.broadcastDomainEvent(event);
+      } else if (event.type === 'message.media_ready' || event.type === 'message.status' || event.type === 'message.updated' || event.type === 'conversation.updated' || event.type === 'typing') return this.broadcastDomainEvent(event);
       else if (event.type === 'wa.qr' || event.type === 'wa.connection') this.broadcastProviderEvent(event);
     });
   }

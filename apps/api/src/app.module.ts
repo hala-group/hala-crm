@@ -22,6 +22,7 @@ import { RealtimeModule } from './modules/realtime/realtime.module.js';
 import { InboxModule } from './modules/inbox/inbox.module.js';
 import { CallsModule } from './modules/calls/calls.module.js';
 import { CloudWebhookModule } from './modules/cloud-webhook/cloud-webhook.module.js';
+import { MessagePushModule } from './modules/message-push/message-push.module.js';
 import { tenantContextMiddleware } from './common/tenant-context.js';
 
 @Module({
@@ -42,6 +43,7 @@ import { tenantContextMiddleware } from './common/tenant-context.js';
     InboxModule,
     CallsModule,
     CloudWebhookModule,
+    MessagePushModule,
     AuditModule,
     AuthModule,
     UsersModule,

@@ -29,4 +29,18 @@ Set `CLOUD_APP_SECRET`, `CLOUD_WEBHOOK_VERIFY_TOKEN`, and `CLOUD_GRAPH_VERSION` 
 
 ## Verify and recover
 
+### Firebase message push rollout
+
+1. Select the Firebase project for CRM explicitly. Prefer a dedicated Web app named `Hala CRM` when a project also serves other applications. Enable the Firebase Cloud Messaging HTTP v1 API and FCM Registration API for that project.
+2. In Firebase Project settings > Cloud Messaging > Web Push certificates, import the existing CRM `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` pair. Set `FIREBASE_VAPID_KEY` to that same public key. Never replace a shared project's existing Web Push key without checking which other applications use it.
+3. Copy the Web app's public config into the API service variables: `FIREBASE_PROJECT_ID`, `FIREBASE_WEB_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_MESSAGING_SENDER_ID`, and `FIREBASE_APP_ID`.
+4. Provision a service account for message delivery with `cloudmessaging.messages.create` on the selected project. Put its base64-encoded JSON in the API service's `FIREBASE_ADMIN_SERVICE_ACCOUNT_BASE64` secret. Do not put this JSON in the repository, browser build, issue tracker, or chat. Base64 does not encrypt it. The API validates that the service account and Web app project IDs match.
+5. Deploy API and web from the same revision. All seven Firebase variables must be present together; no Firebase variables means message push is disabled. Worker configuration does not need Firebase credentials. Use HTTPS and the production Angular build so `ngsw-worker.js` is registered.
+6. Sign in as an authorized user, open **الملف الشخصي → إشعارات الرسائل**, click **تفعيل إشعارات الرسائل**, and allow notifications in the browser. No permission prompt should appear just from signing in. Enable call push separately if wanted.
+7. Send a new inbound WhatsApp message from a test sender to an authorized number. Verify a generic notification with the tab foregrounded, backgrounded, and closed. Click it and verify it opens the correct conversation. History import and outbound messages must not produce a new-message push.
+8. Verify isolation with two test users: an unauthorized account must receive nothing, and removing account membership must stop subsequent notifications. Test disabling message push while keeping call push active, disabling call push while keeping messages active, logout, and login restoration of prior opt-in. Never use real customer contents in a test payload.
+9. If enabling fails because the existing browser subscription uses an older VAPID key, correct the server/Firebase keys first, then have the user re-enrol that browser. Do not rotate a working production key just to fix a single browser.
+
+Passing unit tests and a successful Firebase send response do not prove that a browser displayed the notification. Complete the foreground/background/closed-tab checks before marking the rollout verified.
+
 Run `pnpm lint && pnpm typecheck && pnpm test && pnpm build` before release. CI also runs Testcontainers and the Playwright FakeProvider stack. For a local browser run, seed the stack with `docker-compose.e2e.yml`, set `E2E_BASE_URL`, and run `pnpm test:e2e`. Never use the FakeProvider override in production. Back up MongoDB, media storage, and encryption keys. Redis stores leases, queues, and rate-limit counters; preserve queue data if in-flight outbound work must survive a Redis restore.

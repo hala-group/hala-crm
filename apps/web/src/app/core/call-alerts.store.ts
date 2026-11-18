@@ -97,12 +97,6 @@ export const CallAlertsStore = signalStore(
     async syncSubscription(): Promise<void> {
       ensureAudio();
 
-      if (typeof window !== 'undefined' && 'Notification' in window) {
-        if (Notification.permission === 'default') {
-          try { await Notification.requestPermission(); } catch {}
-        }
-      }
-
       if (!swPush.isEnabled) return;
       try {
         const { publicKey } = await firstValueFrom(http.get<{ publicKey: string }>('/api/v1/calls/push-key'));
@@ -147,7 +141,7 @@ export const CallAlertsStore = signalStore(
               new Promise(resolve => setTimeout(resolve, 800))
             ]);
           } catch { /* An expired subscription will be removed after the next push attempt. */ }
-          try { await swPush.unsubscribe(); } catch {}
+          // Message FCM uses this same browser subscription; remove only the call registration.
         }
         patchState(store, { pushEnabled: false });
       } catch { patchState(store, { pushError: 'تعذر إيقاف تنبيهات المتصفح. حاول مجددًا.' }); }
