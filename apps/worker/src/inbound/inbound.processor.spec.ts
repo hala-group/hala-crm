@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { connect, connection, disconnect, Types } from 'mongoose';
 import { type DomainEvent, type MessageType, type NormalizedInboundMessage } from '@hala/shared';
@@ -201,6 +201,41 @@ describe('inbound persistence', () => {
     });
     expect(events).toContainEqual(expect.objectContaining({ type: 'message.updated',
       message: expect.objectContaining({ waMessageId: 'history-archived' }) }));
+  });
+
+  it('saves history messages while an older attachment is still downloading', async () => {
+    const db = connection.db!;
+    const enqueueHistoryMedia = vi.fn(async (_message: NormalizedInboundMessage) => {});
+    let finishDownload!: (bytes: Buffer) => void;
+    const waitingForMedia = new Promise<Buffer>(resolve => { finishDownload = resolve; });
+    const download = vi.fn(() => waitingForMedia);
+    const publish = vi.fn(async (_event: DomainEvent) => {});
+    const storage = { put: vi.fn(async () => {}), open: async () => { throw new Error('unused'); },
+      delete: vi.fn(async () => {}) };
+    const importer = new InboundProcessor({ connection, storage, download, enqueueHistoryMedia, publish });
+    const base = { tenantId: tenantId.toString(), accountId: accountId.toString(), waId: '201000009999@s.whatsapp.net',
+      timestamp: new Date('2026-01-01T00:00:00Z'), isGroup: false, direction: 'in' as const, history: true };
+    const attachment: NormalizedInboundMessage = { ...base, waMessageId: 'queued-history-media', type: 'document',
+      mediaSource: { kind: 'document', mimeType: 'application/pdf', directPath: '/test-document' } };
+    await importer.process(attachment);
+    expect(enqueueHistoryMedia).toHaveBeenCalledWith(attachment);
+    expect(download).not.toHaveBeenCalled();
+    const mediaTask = importer.processHistoryMedia(attachment);
+    try {
+      await vi.waitFor(() => expect(download).toHaveBeenCalledOnce());
+      await importer.process({ ...base, waMessageId: 'text-after-media', type: 'text', text: 'Recovered history' });
+      expect(await db.collection('messages').findOne({ tenantId, accountId, waMessageId: 'text-after-media' }))
+        .toMatchObject({ text: 'Recovered history' });
+      expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'message.updated',
+        message: expect.objectContaining({ waMessageId: 'text-after-media' }) }));
+      expect(storage.put).not.toHaveBeenCalled();
+    } finally {
+      finishDownload(Buffer.from('document'));
+      await mediaTask;
+    }
+    await importer.processHistoryMedia(attachment);
+    expect(download).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ type: 'message.media_ready' }));
   });
 
   it('syncs read and marked-unread state from another WhatsApp device', async () => {

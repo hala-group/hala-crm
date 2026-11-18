@@ -29,6 +29,8 @@ export class WorkerRuntimeService implements OnModuleInit, OnModuleDestroy {
   private avatarWorker?: Worker<RefreshAvatarCommand | RefreshProfileCommand>;
   private inboundQueue?: Queue<NormalizedInboundMessage>;
   private inboundWorker?: Worker<NormalizedInboundMessage>;
+  private historyMediaQueue?: Queue<NormalizedInboundMessage>;
+  private historyMediaWorker?: Worker<NormalizedInboundMessage>;
   private callQueue?: Queue<ProviderCallEvent>;
   private callWorker?: Worker<ProviderCallEvent>;
   private manager?: SessionManager;
@@ -56,6 +58,8 @@ export class WorkerRuntimeService implements OnModuleInit, OnModuleDestroy {
     const provider = new BaileysProvider(new EncryptedAuthStateStore(mongo, leases, encryptionKey), mongo, this.shutdown.signal);
     const cloud = new CloudApiProvider(mongo, encryptionKey, env.CLOUD_GRAPH_VERSION ?? '');
     const storage = createStorageRegistry();
+    const historyMediaQueue = new Queue<NormalizedInboundMessage>('wa-history-media', { connection: redis });
+    this.historyMediaQueue = historyMediaQueue;
     const processor = new InboundProcessor({ connection: mongo, storage, storageDriver: storage.defaultDriver,
       storageForDriver: driver => storage.forDriver(driver), download: async (source, message) => {
       if (source.cloudMediaId) {
@@ -65,8 +69,16 @@ export class WorkerRuntimeService implements OnModuleInit, OnModuleDestroy {
       if (!message || !provider.downloadMedia) throw new Error('Baileys media message context missing');
       return provider.downloadMedia({ id: message.accountId, tenantId: message.tenantId }, message);
     },
+      enqueueHistoryMedia: async message => {
+        const jobId = createHash('sha256').update(`${message.tenantId}/${message.accountId}/${message.waMessageId}`).digest('hex');
+        await historyMediaQueue.add('attachment', message, { jobId, attempts: 5,
+          backoff: { type: 'exponential', delay: 1000 }, removeOnComplete: true, removeOnFail: 1000 });
+      },
       publish: async event => { await redis.publish('hala.events', JSON.stringify({ event })); } });
     await processor.ensureIndexes();
+    this.historyMediaWorker = new Worker<NormalizedInboundMessage>('wa-history-media',
+      async job => processor.processHistoryMedia(job.data), { connection: redis, concurrency: 3 });
+    this.historyMediaWorker.on('failed', () => this.tracer?.counter('hala_history_media_errors')?.increment());
     this.inboundQueue = new Queue<NormalizedInboundMessage>('wa-inbound', { connection: redis });
     this.inboundWorker = new Worker<NormalizedInboundMessage>('wa-inbound', async job => processor.process(job.data),
       { connection: redis, concurrency: 10 });
@@ -156,10 +168,12 @@ export class WorkerRuntimeService implements OnModuleInit, OnModuleDestroy {
     await this.commandWorker?.close();
     await this.avatarWorker?.close();
     await this.inboundWorker?.close();
+    await this.historyMediaWorker?.close();
     await this.callWorker?.close();
     await this.callQueue?.close();
     await this.inboundQueue?.close();
     await this.manager?.stop();
+    await this.historyMediaQueue?.close();
     this.eventSubscriber?.disconnect();
     this.redis?.disconnect();
     await mongoose.disconnect();

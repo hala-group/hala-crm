@@ -1,4 +1,4 @@
-import makeWASocket, { areJidsSameUser, Browsers, BufferJSON, decryptPollVote, DisconnectReason, extractMessageContent, jidNormalizedUser,
+import makeWASocket, { areJidsSameUser, Browsers, BufferJSON, decryptPollVote, DisconnectReason, extractMessageContent, getHistoryMsg, jidNormalizedUser,
   getKeyAuthor, makeCacheableSignalKeyStore, proto, type AnyMessageContent, type CacheStore, type WASocket, type WAMessage, type WAMessageKey } from '@whiskeysockets/baileys';
 import { Logger } from '@nestjs/common';
 import { type Connection, Types } from 'mongoose';
@@ -14,7 +14,7 @@ export class BaileysProvider implements WhatsAppProvider {
   readonly name = 'baileys';
   readonly capabilities: ReadonlySet<ProviderCapability> = new Set(BAILEYS_CAPABILITIES);
   private readonly sockets = new Map<string, WASocket>();
-  private readonly historySessions = new WeakMap<WASocket, AbortSignal>();
+  private readonly historySessions = new WeakMap<WASocket, { signal: AbortSignal; replay(): Promise<void> }>();
   private readonly importingHistory = new WeakSet<WASocket>();
   private readonly initialHistory = new InitialHistorySync();
   private readonly polls = new Map<string, { creatorJid: string; secret: Uint8Array; options: { id: string; text: string }[] }>();
@@ -125,7 +125,7 @@ export class BaileysProvider implements WhatsAppProvider {
     const syncFullHistory = this.initialHistory.useFullHistory(account.id, Boolean(state.creds.me || state.creds.account));
     if (syncFullHistory) this.logger.log(`Requesting initial WhatsApp history for account ${account.id}`);
     const historySession = new AbortController();
-    const signal = historySession.signal;
+    const signal = this.shutdown ? AbortSignal.any([historySession.signal, this.shutdown]) : historySession.signal;
     let historyDownloads = Promise.resolve();
     let historyWrites = Promise.resolve();
     let credentialsWrite = Promise.resolve();
@@ -134,6 +134,25 @@ export class BaileysProvider implements WhatsAppProvider {
         if (signal.aborted) return;
         await this.processHistoryData(history, account, emit, signal, socket.user?.id);
       }).catch(() => this.logger.error(`WhatsApp history persistence failed for account ${account.id}`));
+    };
+    const queueHistory = (message: proto.Message.IHistorySyncNotification): Promise<void> => {
+      if (!message.initialHistBootstrapInlinePayload?.length && !(message.mediaKey?.length && message.directPath)) return historyDownloads;
+      const batch = `type ${message.syncType ?? 'unknown'}, chunk ${message.chunkOrder ?? 'unknown'}`;
+      historyDownloads = historyDownloads.then(async () => {
+        if (signal.aborted) return;
+        this.logger.log(`Reading WhatsApp history for account ${account.id}, ${batch}`);
+        const history = await downloadHistoryBatch(message, signal);
+        this.logger.log(`Decoded WhatsApp history for account ${account.id}, ${batch}: ${history.chats.length} chats, ${history.messages.length} messages`);
+        importHistory(history);
+      }).catch(error => {
+        if (signal.aborted) return;
+        const status = (error as { response?: { status?: number } } | undefined)?.response?.status;
+        const reason = typeof status === 'number' ? `HTTP ${status}`
+          : error instanceof Error && ['AbortError', 'CanceledError', 'TimeoutError'].includes(error.name)
+            ? 'download timed out' : 'download or decode failed';
+        this.logger.warn(`WhatsApp history for account ${account.id}, ${batch}: ${reason}`);
+      });
+      return historyDownloads;
     };
     const socket = makeWASocket({
       auth: {
@@ -149,28 +168,16 @@ export class BaileysProvider implements WhatsAppProvider {
         return this.getMessage(account.id, key.id);
       },
       shouldSyncHistoryMessage: message => {
-        if (message.initialHistBootstrapInlinePayload?.length || (message.mediaKey?.length && message.directPath)) {
-          const batch = `type ${message.syncType ?? 'unknown'}, chunk ${message.chunkOrder ?? 'unknown'}`;
-          historyDownloads = historyDownloads.then(async () => {
-            if (signal.aborted) return;
-            this.logger.log(`Reading WhatsApp history for account ${account.id}, ${batch}`);
-            const history = await downloadHistoryBatch(message, signal);
-            this.logger.log(`Decoded WhatsApp history for account ${account.id}, ${batch}: ${history.chats.length} chats, ${history.messages.length} messages`);
-            importHistory(history);
-          }).catch(error => {
-            if (signal.aborted) return;
-            const status = (error as { response?: { status?: number } } | undefined)?.response?.status;
-            const reason = typeof status === 'number' ? `HTTP ${status}`
-              : error instanceof Error && ['AbortError', 'CanceledError', 'TimeoutError'].includes(error.name)
-                ? 'download timed out' : 'download or decode failed';
-            this.logger.warn(`WhatsApp history for account ${account.id}, ${batch}: ${reason}`);
-          });
-        }
+        void queueHistory(message);
         return true;
       }
     });
     this.sockets.set(account.id, socket);
-    this.historySessions.set(socket, historySession.signal);
+    this.historySessions.set(socket, { signal, replay: async () => {
+      const acceptedIds = (state.creds.processedHistoryMessages ?? []).flatMap(({ key }) => key.id ? [key.id] : []);
+      await this.replayAcceptedHistory(account, acceptedIds, signal, queueHistory);
+      await historyWrites;
+    } });
     const notify = (event: ProviderEvent): void => { void emit(event).catch(() => this.logger.warn('Session event rejected')); };
     const publishContact = (contact: { id?: string; lid?: string; jid?: string; name?: string; notify?: string }): void => {
       if (contact.id) notify({ type: 'wa.contact', accountId: account.id, tenantId: account.tenantId,
@@ -310,6 +317,30 @@ export class BaileysProvider implements WhatsAppProvider {
     } };
   }
 
+  private async replayAcceptedHistory(
+    account: ProviderAccount, acceptedIds: string[], signal: AbortSignal,
+    queueHistory: (notification: proto.Message.IHistorySyncNotification) => Promise<void>
+  ): Promise<void> {
+    const db = this.connection?.db;
+    if (!db || !acceptedIds.length || signal.aborted) return;
+    const accountId = new Types.ObjectId(account.id);
+    const tenantId = new Types.ObjectId(account.tenantId);
+    if (!await db.collection('whatsapp_accounts').findOne({ _id: accountId, tenantId }, { projection: { _id: 1 } })) return;
+    const records = db.collection('wa_raw_messages').find({ accountId, id: { $in: acceptedIds },
+      createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60_000) } }, { projection: { raw: 1 } }).sort({ createdAt: 1, _id: 1 });
+    for await (const record of records) {
+      if (signal.aborted) return;
+      if (typeof record['raw'] !== 'string') continue;
+      try {
+        const message = JSON.parse(record['raw'], BufferJSON.reviver) as proto.IMessage;
+        const notification = getHistoryMsg(message);
+        if (notification) await queueHistory(notification);
+      } catch {
+        this.logger.warn(`Unable to replay cached WhatsApp history for account ${account.id}`);
+      }
+    }
+  }
+
   async logout(account: ProviderAccount): Promise<void> {
     this.initialHistory.clear(account.id);
     this.clearPolls(account.id);
@@ -380,12 +411,15 @@ export class BaileysProvider implements WhatsAppProvider {
     if (!history.chats.length && !history.contacts.length && !history.messages.length) return;
     const { id: accountId, tenantId } = account;
     let failed = 0;
-    const publish = async (event: ProviderEvent): Promise<void> => {
-      if (signal.aborted) return;
+    let processed = 0;
+    const publish = async (event: ProviderEvent): Promise<boolean> => {
+      if (signal.aborted) return false;
       try {
         await emit(event);
+        return true;
       } catch {
         failed++;
+        return false;
       }
     };
     for (const contact of history.contacts) {
@@ -416,23 +450,27 @@ export class BaileysProvider implements WhatsAppProvider {
           this.cacheMessage(accountId, message.key.id, message.message);
           await this.saveRawMessageToDb(accountId, message.key.id, message.message);
         }
-        await publish({ type: 'wa.message.in', accountId, tenantId, message: { ...normalized, history: true } });
+        if (await publish({ type: 'wa.message.in', accountId, tenantId, message: { ...normalized, history: true } })) {
+          processed++;
+          if (processed % 250 === 0) this.logger.log(`WhatsApp history progress for account ${accountId}: ${processed} messages processed`);
+        }
       } catch {
         failed++;
       }
     }
     this.initialHistory.historyReceived(accountId, history.messages.length);
-    this.logger.log(`WhatsApp history batch for account ${accountId}: ${history.chats.length} chats, ${history.messages.length} messages, ${failed} failed events`);
+    this.logger.log(`WhatsApp history batch for account ${accountId}: ${history.chats.length} chats, ${processed}/${history.messages.length} messages processed, ${failed} failed events`);
   }
 
   async syncHistory(account: ProviderAccount, targets: HistorySyncTarget[]): Promise<number> {
     const socket = this.socket(account);
     const session = this.historySessions.get(socket);
-    if (!session || session.aborted) throw new Error('ACCOUNT_NOT_RUNNING');
-    const signal = this.shutdown ? AbortSignal.any([session, this.shutdown]) : session;
+    if (!session || session.signal.aborted) throw new Error('ACCOUNT_NOT_RUNNING');
+    const { signal } = session;
     if (this.importingHistory.has(socket)) return 0;
     this.importingHistory.add(socket);
     try {
+      await session.replay();
       this.logger.log(`Requesting older WhatsApp history for ${targets.length} conversations`);
       let failed = 0;
       const received = await pageHistory(socket, targets, signal, () => { failed++; });
@@ -467,7 +505,7 @@ export class BaileysProvider implements WhatsAppProvider {
         refreshed?.documentMessage ?? refreshed?.stickerMessage;
       if (!details?.directPath && !details?.url) throw new Error('WhatsApp did not return a refreshed media path');
       return { ...source, directPath: details.directPath ?? undefined, url: details.url ?? undefined };
-    });
+    }, this.shutdown);
   }
 
   private socket(account: ProviderAccount): WASocket {

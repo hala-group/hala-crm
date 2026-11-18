@@ -11,7 +11,13 @@ interface Dependencies {
   storageDriver?: StorageDriver;
   storageForDriver?: (driver: StorageDriver) => StoragePort;
   download: (source: MediaSource, message?: NormalizedInboundMessage) => Promise<Buffer>;
+  enqueueHistoryMedia?: (message: NormalizedInboundMessage) => Promise<void>;
   publish: (event: DomainEvent) => Promise<void>;
+}
+
+interface MediaReference {
+  assetId: Types.ObjectId; messageId: Types.ObjectId; conversationId: Types.ObjectId;
+  assignedUserId: string | null;
 }
 
 interface PendingMutation {
@@ -285,7 +291,7 @@ export class InboundProcessor {
           lastMessageStatus: latest?.['lastMessageStatus'] ?? (latest?.['lastMessageDirection'] === 'out' ? 'sent' : undefined),
           unreadCount: latest?.['unreadCount'] ?? 0 } });
     }
-    if (data.mediaSource && !(message['clientMessageId'] && message['mediaId'])) {
+    if (data.mediaSource && !message['revokedAt'] && !(message['clientMessageId'] && message['mediaId'])) {
       const prefix = `${data.tenantId}/${data.accountId}/${message._id.toString()}`;
       const key = `${prefix}/original`;
       await media.updateOne({ tenantId, accountId, messageId: message._id }, { $setOnInsert: {
@@ -297,27 +303,61 @@ export class InboundProcessor {
       const asset = await media.findOne({ tenantId, accountId, messageId: message._id });
       if (asset) await messages.updateOne({ _id: message._id, tenantId, accountId }, { $set: { mediaId: asset._id } });
       if (asset && asset['status'] !== 'ready') {
-        try {
-          const bytes = await this.deps.download(data.mediaSource, data);
-          await this.deps.storage.put(key, bytes, data.mediaSource.mimeType);
-          let thumbnailKey: string | undefined;
-          if (data.mediaSource.kind === 'image' || data.mediaSource.kind === 'sticker') {
-            thumbnailKey = `${prefix}/thumb`;
-            const thumbnail = await sharp(bytes).resize(320, 320, { fit: 'inside' }).jpeg().toBuffer();
-            await this.deps.storage.put(thumbnailKey, thumbnail, 'image/jpeg');
-          }
-          await media.updateOne({ _id: asset._id, tenantId, accountId }, { $set: { status: 'ready', size: bytes.length,
-            sha256: createHash('sha256').update(bytes).digest('hex'), thumbnailKey, updatedAt: new Date() } });
-          await this.deps.publish({ type: 'message.media_ready', tenantId: data.tenantId, accountId: data.accountId,
-            conversationId: conversation._id.toString(), assignedUserId: conversation['assignedUserId']?.toString() ?? null,
-            messageId: message._id.toString(), mediaId: asset._id.toString() });
-        } catch (error) {
-          await media.updateOne({ _id: asset._id, tenantId, accountId }, { $set: { status: 'failed', updatedAt: new Date() } });
-          throw error;
-        }
+        if (data.history && this.deps.enqueueHistoryMedia) await this.deps.enqueueHistoryMedia(data);
+        else await this.storeMedia(data, data.mediaSource, { assetId: asset._id, messageId: message._id,
+          conversationId: conversation._id, assignedUserId: conversation['assignedUserId']?.toString() ?? null });
       }
     }
     await this.applyPendingMutations(db, tenantId, accountId, data.waMessageId);
+  }
+
+  async processHistoryMedia(input: NormalizedInboundMessage): Promise<void> {
+    const data = normalizedInboundSchema.parse(input);
+    if (!data.history || !data.mediaSource) return;
+    const scope = { tenantId: new Types.ObjectId(data.tenantId), accountId: new Types.ObjectId(data.accountId) };
+    const db = this.deps.connection.db!;
+    const message = await db.collection('messages').findOne({ ...scope, waMessageId: data.waMessageId, revokedAt: null });
+    if (!message?.['mediaId']) return;
+    const asset = await db.collection('media').findOne({ ...scope, _id: message['mediaId'],
+      messageId: message._id, status: { $ne: 'ready' } });
+    if (!asset) return;
+    const conversation = await db.collection('conversations').findOne({ ...scope, _id: message['conversationId'] });
+    if (!conversation) return;
+    await this.storeMedia(data, data.mediaSource, { assetId: asset._id, messageId: message._id,
+      conversationId: conversation._id, assignedUserId: conversation['assignedUserId']?.toString() ?? null });
+  }
+
+  private async storeMedia(data: NormalizedInboundMessage, source: MediaSource, reference: MediaReference): Promise<void> {
+    const media = this.deps.connection.db!.collection('media');
+    const filter = { _id: reference.assetId, tenantId: new Types.ObjectId(data.tenantId),
+      accountId: new Types.ObjectId(data.accountId), messageId: reference.messageId };
+    const prefix = `${data.tenantId}/${data.accountId}/${reference.messageId.toString()}`;
+    const key = `${prefix}/original`;
+    try {
+      const bytes = await this.deps.download(source, data);
+      // A queued attachment may have been removed while the transfer was in progress.
+      if (!await media.findOne(filter, { projection: { _id: 1 } })) return;
+      await this.deps.storage.put(key, bytes, source.mimeType);
+      let thumbnailKey: string | undefined;
+      if (source.kind === 'image' || source.kind === 'sticker') {
+        thumbnailKey = `${prefix}/thumb`;
+        const thumbnail = await sharp(bytes).resize(320, 320, { fit: 'inside' }).jpeg().toBuffer();
+        await this.deps.storage.put(thumbnailKey, thumbnail, 'image/jpeg');
+      }
+      const saved = await media.updateOne(filter, { $set: { status: 'ready', size: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex'), thumbnailKey, updatedAt: new Date() } });
+      if (!saved.matchedCount) {
+        await this.deps.storage.delete(key);
+        if (thumbnailKey) await this.deps.storage.delete(thumbnailKey);
+        return;
+      }
+      await this.deps.publish({ type: 'message.media_ready', tenantId: data.tenantId, accountId: data.accountId,
+        conversationId: reference.conversationId.toString(), assignedUserId: reference.assignedUserId,
+        messageId: reference.messageId.toString(), mediaId: reference.assetId.toString() });
+    } catch (error) {
+      await media.updateOne({ ...filter, status: { $ne: 'ready' } }, { $set: { status: 'failed', updatedAt: new Date() } });
+      throw error;
+    }
   }
 
   private async applyPendingMutations(db: NonNullable<Connection['db']>, tenantId: Types.ObjectId,
