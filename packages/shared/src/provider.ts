@@ -27,7 +27,7 @@ export interface HistorySyncTarget {
 }
 export type ProviderEvent =
   | { type: 'wa.qr'; accountId: string; tenantId: string; qr: string }
-  | { type: 'wa.connection'; accountId: string; tenantId: string; status: 'connecting' | 'connected' | 'disconnected' | 'logged_out' | 'error'; phoneNumber?: string; error?: string }
+  | { type: 'wa.connection'; accountId: string; tenantId: string; status: 'connecting' | 'connected' | 'disconnected' | 'logged_out' | 'error'; phoneNumber?: string; ownJid?: string; ownLid?: string; error?: string }
   | { type: 'wa.message.in'; accountId: string; tenantId: string; message: NormalizedInboundMessage }
   | { type: 'wa.contact'; accountId: string; tenantId: string; contact: ProviderContact;
       historyChat?: { timestamp: Date; unreadCount: number } }

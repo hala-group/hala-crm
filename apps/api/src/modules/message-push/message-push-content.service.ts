@@ -111,6 +111,8 @@ export class MessagePushContentService {
   ) {}
 
   async describe(event: Extract<DomainEvent, { type: 'message.created' }>, contactId: string) {
+    const account = await this.accounts.findOne({ tenantId: event.tenantId, _id: event.accountId })
+      .select('phoneNumber ownJid ownLid').lean();
     const contact = await this.contacts
       .findOne({ tenantId: event.tenantId, _id: contactId })
       .lean();
@@ -122,7 +124,7 @@ export class MessagePushContentService {
         : null
       : contact;
     const senderName = sender
-      ? contactDisplayName(sender)
+      ? contactDisplayName(sender, account ?? {})
       : event.message.sender?.name ||
         (event.message.sender ? contactDisplayName(event.message.sender) : 'مرسل غير معروف');
     const title = group

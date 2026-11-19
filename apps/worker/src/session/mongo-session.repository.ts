@@ -35,10 +35,15 @@ export class MongoSessionRepository implements SessionRepository {
       status: event.status, assignedWorkerId: workerId, leaseUpdatedAt: new Date(), lastError: event.error
     };
     if (event.status === 'connected') fields['lastConnectedAt'] = new Date();
+    if (event.status === 'connected' && event.ownJid) fields['ownJid'] = event.ownJid;
+    if (event.status === 'connected' && event.ownLid) fields['ownLid'] = event.ownLid;
     if (event.status === 'logged_out') fields['desiredState'] = 'disconnected';
     if (event.phoneNumber?.endsWith('@s.whatsapp.net')) fields['phoneNumber'] = event.phoneNumber.split('@')[0]?.split(':')[0];
     else if (event.phoneNumber && /^\+?[\d\s()-]{6,25}$/.test(event.phoneNumber)) fields['phoneNumber'] = event.phoneNumber;
-    await this.connection.collection('whatsapp_accounts').updateOne({ _id: accountId, tenantId }, { $set: fields });
+    const clearOldLid = event.status === 'connected' && Boolean(event.ownJid) && !event.ownLid;
+    await this.connection.collection('whatsapp_accounts').updateOne({ _id: accountId, tenantId }, {
+      $set: fields, ...(clearOldLid ? { $unset: { ownLid: '' } } : {})
+    });
   }
   async clearAuth(account: ProviderAccount): Promise<void> {
     await this.connection.collection('wa_auth_states').deleteMany({

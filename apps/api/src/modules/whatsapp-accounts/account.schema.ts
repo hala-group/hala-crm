@@ -3,6 +3,7 @@ import { type AccountLevel, type AccountView } from '@hala/shared';
 import { tenantPlugin } from '../../common/tenant.plugin.js';
 
 export interface WhatsAppAccountRecord extends Omit<AccountView, '_id' | 'tenantId' | 'capabilities'> {
+  ownJid?: string; ownLid?: string;
   tenantId: Types.ObjectId;
   settings: { autoReadReceipts: boolean; sendPacing: { minDelayMs: number; maxDelayMs: number } };
   assignedWorkerId?: string;
@@ -36,7 +37,7 @@ export interface WaAuthStateRecord {
 
 export const accountSchema = new Schema<WhatsAppAccountRecord>({
   tenantId: { type: Schema.Types.ObjectId, required: true, index: true },
-  label: { type: String, required: true }, color: String, phoneNumber: String,
+  label: { type: String, required: true }, color: String, phoneNumber: String, ownJid: String, ownLid: String,
   provider: { type: String, enum: ['baileys', 'cloud_api'], default: 'baileys' },
   status: { type: String, enum: ['created', 'qr_pending', 'connecting', 'connected', 'disconnected', 'logged_out', 'error'], default: 'created' },
   desiredState: { type: String, enum: ['connected', 'disconnected'], default: 'disconnected' },

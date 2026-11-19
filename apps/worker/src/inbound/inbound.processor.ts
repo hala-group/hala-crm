@@ -4,6 +4,7 @@ import sharp from 'sharp';
 import { contactDisplayName, normalizedInboundSchema, type DomainEvent, type MediaSource, type MessageMutation, type MessageView,
   type NormalizedInboundMessage, type ProviderEvent } from '@hala/shared';
 import { type StorageDriver, type StoragePort } from '@hala/shared/storage';
+import { accountIdentity } from './contact-identity.js';
 
 interface Dependencies {
   connection: Connection;
@@ -38,7 +39,8 @@ export class InboundProcessor {
     const tenantId = new Types.ObjectId(event.tenantId);
     const accountId = new Types.ObjectId(event.accountId);
     const db = this.deps.connection.db!;
-    if (!await db.collection('whatsapp_accounts').findOne({ _id: accountId, tenantId })) return;
+    const account = await db.collection('whatsapp_accounts').findOne({ _id: accountId, tenantId });
+    if (!account) return;
     const contacts = db.collection('contacts');
     const existing = await contacts.find({ tenantId, $or: [{ waId: { $in: ids } }, ...(lid ? [{ lid }] : [])] }).toArray();
     const name = contact.name?.trim();
@@ -76,7 +78,8 @@ export class InboundProcessor {
       for (const conversation of conversations) {
         await this.deps.publish({ type: 'conversation.updated', tenantId: event.tenantId, accountId: event.accountId,
           conversation: { _id: conversation._id.toString(), tenantId: event.tenantId, accountId: event.accountId,
-            contactId: item._id.toString(), contactName: contactDisplayName({ ...item, ...fields, isGroup: Boolean(item['isGroup'] || isGroup), isSelf: Boolean(item['isSelf'] || (fields as Record<string, unknown>)['isSelf']) }),
+            contactId: item._id.toString(), contactName: contactDisplayName({ ...item, ...fields, waId: item['waId'] as string,
+              isGroup: Boolean(item['isGroup'] || isGroup) }, accountIdentity(account)),
             contactWaId: item['waId'] as string, status: conversation['status'] as 'open' | 'archived',
             assignedUserId: conversation['assignedUserId']?.toString() ?? null,
             lastMessageAt: (conversation['lastMessageAt'] as Date).toISOString(),
@@ -106,7 +109,8 @@ export class InboundProcessor {
     const tenantId = new Types.ObjectId(event.tenantId);
     const accountId = new Types.ObjectId(event.accountId);
     const db = this.deps.connection.db!;
-    if (!await db.collection('whatsapp_accounts').findOne({ _id: accountId, tenantId })) return;
+    const account = await db.collection('whatsapp_accounts').findOne({ _id: accountId, tenantId });
+    if (!account) return;
     const phone = event.chatId.match(/^([1-9][0-9]{5,15})@s\.whatsapp\.net$/);
     const identities = [{ waId: event.chatId }, { lid: event.chatId }, ...(phone ? [{ phoneE164: `+${phone[1]}` }] : [])];
     const contact = await db.collection('contacts').findOne({ tenantId, $or: identities });
@@ -135,7 +139,7 @@ export class InboundProcessor {
       conversation: { _id: refreshed._id.toString(), tenantId: event.tenantId, accountId: event.accountId,
         contactId: contact._id.toString(), contactName: contactDisplayName({ displayName: contact['displayName'] as string | undefined,
           pushName: contact['pushName'] as string | undefined, phoneE164: contact['phoneE164'] as string | undefined,
-          waId: contact['waId'] as string, isGroup: Boolean(contact['isGroup']), isSelf: Boolean(contact['isSelf']) }),
+          waId: contact['waId'] as string, isGroup: Boolean(contact['isGroup']) }, accountIdentity(account)),
         contactWaId: contact['waId'] as string, ...(contact['phoneE164'] ? { contactPhoneE164: contact['phoneE164'] as string } : {}),
         contactAbout: refreshed['contactAbout'] as string | null | undefined,
         commonGroups: (refreshed['commonGroups'] as { id: string; name: string }[] | undefined) ?? [],
@@ -184,14 +188,13 @@ export class InboundProcessor {
     const messages = db.collection('messages');
     const media = db.collection('media');
     const now = new Date();
-    const lidOwner = data.lid ? await contacts.findOne({ tenantId, lid: data.lid }) : null;
+    const lid = data.direction === 'in' ? data.lid : data.waId.endsWith('@lid') ? data.waId : undefined;
+    const lidOwner = lid ? await contacts.findOne({ tenantId, lid }) : null;
     const contactFilter = lidOwner ? { tenantId, _id: lidOwner._id } : { tenantId, waId: data.waId };
-    const isSelfContact = Boolean(data.isSelf || lidOwner?.['isSelf']);
     await contacts.updateOne(contactFilter, { $set: {
-      ...(!data.isGroup && data.pushName?.trim() ? { pushName: data.pushName.trim() } : {}),
-      ...(data.lid && (!lidOwner || lidOwner['waId'] === data.waId) ? { lid: data.lid } : {}),
+      ...(data.direction === 'in' && !data.isSelf && !data.isGroup && data.pushName?.trim() ? { pushName: data.pushName.trim() } : {}),
+      ...(lid && (!lidOwner || lidOwner['waId'] === data.waId) ? { lid } : {}),
       ...(data.phoneE164 ? { phoneE164: data.phoneE164 } : {}),
-      ...(isSelfContact ? { isSelf: true, displayName: 'أنت (رسائل شخصية)', pushName: 'أنت' } : {}),
       updatedAt: now
     },
     $setOnInsert: { createdAt: now, isGroup: data.isGroup, tags: [], customFields: {} } }, { upsert: true });
@@ -297,7 +300,7 @@ export class InboundProcessor {
         conversation: { _id: conversation._id.toString(), tenantId: data.tenantId, accountId: data.accountId,
           contactId: contact._id.toString(), contactName: contactDisplayName({ displayName: contact['displayName'],
             pushName: contact['pushName'], phoneE164: contact['phoneE164'], waId: data.waId, isGroup: data.isGroup,
-            isSelf: Boolean(data.isSelf || contact['isSelf']) }),
+          }, accountIdentity(account)),
           contactWaId: data.waId, status: latest?.['status'] ?? 'open', assignedUserId,
           tags: contact['tags'] ?? [],
           lastMessageAt: latest?.['lastMessageAt']?.toISOString() ?? data.timestamp.toISOString(),
@@ -441,11 +444,12 @@ export class InboundProcessor {
       conversationId: conversation._id.toString(), assignedUserId: conversation['assignedUserId']?.toString() ?? null, message });
     const refreshedConversation = await db.collection('conversations').findOne({ _id: conversation._id, tenantId, accountId });
     const contact = await db.collection('contacts').findOne({ _id: contactId, tenantId });
+    const account = await db.collection('whatsapp_accounts').findOne({ _id: accountId, tenantId });
     if (refreshedConversation && contact) await this.deps.publish({ type: 'conversation.updated', tenantId: tenantId.toString(),
       accountId: accountId.toString(), conversation: { _id: refreshedConversation._id.toString(), tenantId: tenantId.toString(),
         accountId: accountId.toString(), contactId: contactId.toString(),
         contactName: contactDisplayName({ displayName: contact['displayName'], pushName: contact['pushName'],
-          phoneE164: contact['phoneE164'], waId: contact['waId'] as string, isGroup: Boolean(contact['isGroup']) }),
+          phoneE164: contact['phoneE164'], waId: contact['waId'] as string, isGroup: Boolean(contact['isGroup']) }, accountIdentity(account ?? {})),
         contactWaId: contact['waId'] as string, status: refreshedConversation['status'] as 'open' | 'archived',
         assignedUserId: refreshedConversation['assignedUserId']?.toString() ?? null,
         lastMessageAt: (refreshedConversation['lastMessageAt'] as Date).toISOString(),

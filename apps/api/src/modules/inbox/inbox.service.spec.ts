@@ -52,6 +52,23 @@ function createService(overrides: {
 }
 
 describe('inbox account existence', () => {
+  it('renders a shared contact as self only under its own connected account', async () => {
+    const user = principal();
+    const firstId = new Types.ObjectId(), otherId = new Types.ObjectId(), contactId = new Types.ObjectId();
+    const record = { _id: new Types.ObjectId(), tenantId: new Types.ObjectId(user.tenantId), accountId: firstId,
+      contactId, status: 'open', lastMessageAt: new Date(), lastMessageType: 'text', lastMessageDirection: 'in', unreadCount: 0 };
+    const query = (value: unknown) => ({ select: vi.fn().mockReturnThis(), lean: async () => value });
+    const service = createService({
+      contacts: { find: () => query([]), findOne: () => query({ waId: '201001234567@s.whatsapp.net',
+        isSelf: true, displayName: 'أنت (رسائل شخصية)', pushName: 'الاسم الصحيح' }) },
+      conversations: { findOne: () => query(record) },
+      accounts: { findOne: (filter: { _id: Types.ObjectId }) => query({ _id: filter._id,
+        phoneNumber: filter._id.equals(firstId) ? '201001234567' : '201009999999' }) }
+    });
+    expect((await service.getConversationView(user, record._id.toString())).contactName).toBe('أنت (رسائل شخصية)');
+    record.accountId = otherId;
+    expect((await service.getConversationView(user, record._id.toString())).contactName).toBe('الاسم الصحيح');
+  });
   it('scopes list queries to existing accounts even for an owner', async () => {
     const user = principal();
     const accountId = new Types.ObjectId();

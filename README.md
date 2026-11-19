@@ -4,6 +4,8 @@ Multi-tenant WhatsApp inbox with per-number authorization, call history, and hor
 
 On mobile, open the menu button for navigation and logout. Inbox search and the new-chat icon share one row. Tap the colored circle next to **البريد الوارد** to choose a number; the popup lists account labels, phone numbers and the current selection. The multicolor circle represents **كل الأرقام**. Existing account colors are reused, with stable fallback colors for accounts without one.
 
+Contact titles use saved WhatsApp contact names or incoming sender metadata. Outgoing echoes never rename or alias the recipient using the account owner's sender metadata. **أنت (رسائل شخصية)** applies only when the contact matches the source account's verified WhatsApp identity; shared contacts can have a different title under another account. Unavailable names fall back to a phone number rather than an unverified self label.
+
 ## Prerequisites
 
 Node.js 24 LTS, pnpm 11.25 or compatible, and Docker Compose. Copy `.env.example` to `.env`. Set two different random JWT secrets of at least 32 characters, plus `BOOTSTRAP_TENANT_SLUG`, `BOOTSTRAP_TENANT_NAME`, `BOOTSTRAP_OWNER_EMAIL`, and a `BOOTSTRAP_OWNER_PASSWORD` of at least 12 characters. Set `ENCRYPTION_KEY_BASE64` to a base64-encoded 32-byte random key (for example, generate one with `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"`). Keep `.env` private and back up the encryption key securely; losing it makes saved WhatsApp credentials unreadable.

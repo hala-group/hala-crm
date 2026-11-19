@@ -57,6 +57,32 @@ describe('Baileys inbound normalizer', () => {
     expect(result).toBeNull();
   });
 
+  it('does not assign the sender name or sender LID to an outgoing recipient', () => {
+    const result = normalizeBaileysMessage('a', 'b', make({ conversation: 'outgoing' }, {
+      pushName: 'اسم صاحب الحساب', key: { remoteJid: '201001234567@s.whatsapp.net', fromMe: true,
+        senderPn: '201009999999@s.whatsapp.net', senderLid: '999999999999@lid', id: 'out-name' }
+    }), '201009999999:4@s.whatsapp.net', '999999999999@lid');
+    expect(result?.waId).toBe('201001234567@s.whatsapp.net');
+    expect(result?.pushName).toBeUndefined();
+    expect(result?.lid).toBeUndefined();
+    expect(result?.isSelf).toBeUndefined();
+  });
+
+  it('recognizes both own identities with device suffixes without conflating PN and LID namespaces', () => {
+    const message = make({ conversation: 'self' }, { key: { id: 'self', fromMe: true, remoteJid: '777777777777@lid' } });
+    expect(normalizeBaileysMessage('a', 'b', message, '201009999999:4@s.whatsapp.net', '777777777777:2@lid')?.isSelf).toBe(true);
+    expect(normalizeBaileysMessage('a', 'b', message, '777777777777@s.whatsapp.net')?.isSelf).toBeUndefined();
+    expect(normalizeBaileysMessage('a', 'b', { ...message, key: { ...message.key, remoteJid: '201009999999@s.whatsapp.net' } },
+      '201009999999:4@s.whatsapp.net')?.isSelf).toBe(true);
+  });
+
+  it('preserves a real inbound sender name and its PN/LID mapping', () => {
+    expect(normalizeBaileysMessage('a', 'b', make({ conversation: 'inbound' }, {
+      pushName: 'اسم العميل', key: { id: 'in-name', remoteJid: '777777777777@lid', fromMe: false,
+        senderPn: '201001234567@s.whatsapp.net' }
+    }))).toMatchObject({ waId: '201001234567@s.whatsapp.net', lid: '777777777777@lid', pushName: 'اسم العميل' });
+  });
+
   it('ignores placeholders that have no message content', () => {
     expect(normalizeBaileysMessage('a', 'b', make({ placeholderMessage: {} }))).toBeNull();
   });

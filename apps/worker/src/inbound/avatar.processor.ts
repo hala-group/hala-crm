@@ -4,6 +4,7 @@ import sharp from 'sharp';
 import { contactDisplayName, type NormalizedInboundMessage, type RefreshAvatarCommand, type RefreshProfileCommand } from '@hala/shared';
 import { type StorageRegistry } from '@hala/shared/storage';
 import { type SessionManager } from '../session/session.manager.js';
+import { accountIdentity } from './contact-identity.js';
 
 export class AvatarProcessor {
   constructor(private readonly connection: Connection, private readonly storage: StorageRegistry,
@@ -53,7 +54,7 @@ export class AvatarProcessor {
                 phoneE164: refreshedContact['phoneE164'],
                 waId: refreshedContact['waId'] as string,
                 isGroup: Boolean(refreshedContact['isGroup'])
-              }),
+              }, accountIdentity(account)),
               contactWaId: refreshedContact['waId'] as string,
               ...(refreshedContact['phoneE164'] ? { contactPhoneE164: refreshedContact['phoneE164'] as string } : {}),
               contactAbout: refreshedConversation['contactAbout'] as string | null | undefined,

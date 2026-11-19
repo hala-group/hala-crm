@@ -1,4 +1,4 @@
-import { areJidsSameUser, extractMessageContent, getContentType, proto, type WAMessage, type DownloadableMessage } from '@whiskeysockets/baileys';
+import { jidNormalizedUser, extractMessageContent, getContentType, proto, type WAMessage, type DownloadableMessage } from '@whiskeysockets/baileys';
 import { type MediaSource, type NormalizedInboundMessage, type MessageType } from '@hala/shared';
 
 type MediaFields = DownloadableMessage & {
@@ -52,7 +52,7 @@ function contactCard(contact: proto.Message.IContactMessage): { name: string; ph
   };
 }
 
-export function normalizeBaileysMessage(accountId: string, tenantId: string, message: WAMessage, ownJid?: string): NormalizedInboundMessage | null {
+export function normalizeBaileysMessage(accountId: string, tenantId: string, message: WAMessage, ownJid?: string, ownLid?: string): NormalizedInboundMessage | null {
   const remoteJid = message.key.remoteJid ?? undefined;
   const waMessageId = message.key.id ?? undefined;
   if (!remoteJid || !waMessageId) return null;
@@ -60,11 +60,11 @@ export function normalizeBaileysMessage(accountId: string, tenantId: string, mes
   if (typeof message.messageStubType === 'number' && ignoredTransportStubs.has(message.messageStubType)) return null;
   const isGroup = remoteJid.endsWith('@g.us');
   const isLid = remoteJid.endsWith('@lid');
-  const isSelf = Boolean(ownJid && areJidsSameUser(remoteJid, ownJid));
+  const isSelf = !isGroup && [ownJid, ownLid].some(id => Boolean(id && jidNormalizedUser(remoteJid) === jidNormalizedUser(id)));
   // senderPn identifies the sender; on outgoing messages that is our own number.
   const pnJid = !isGroup && isLid && !message.key.fromMe ? message.key.senderPn : undefined;
   const waId = pnJid || remoteJid;
-  const lid = !isGroup ? (isLid ? remoteJid : message.key.senderLid) : undefined;
+  const lid = !isGroup ? (isLid ? remoteJid : !message.key.fromMe ? message.key.senderLid : undefined) : undefined;
   const content = extractMessageContent(message.message) ?? message.message ?? {};
   const messageType = getContentType(content);
   if (messageType === 'placeholderMessage') return null;
@@ -72,7 +72,7 @@ export function normalizeBaileysMessage(accountId: string, tenantId: string, mes
   const normalized: NormalizedInboundMessage = {
     accountId, tenantId, waMessageId, waId, lid,
     phoneE164: phoneFromJid(pnJid || remoteJid),
-    pushName: isSelf ? 'أنت' : (message.pushName ?? undefined),
+    pushName: !message.key.fromMe && !isSelf && !isGroup ? message.pushName ?? undefined : undefined,
     isGroup,
     ...(isGroup && message.key.participant ? { sender: { waId: message.key.participantPn || message.key.participant,
       name: message.pushName ?? undefined, phoneE164: phoneFromJid(message.key.participantPn || message.key.participant) } } : {}),

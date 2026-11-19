@@ -132,7 +132,7 @@ export class BaileysProvider implements WhatsAppProvider {
     const importHistory = (history: HistoryBatch): Promise<void> => {
       historyWrites = historyWrites.then(async () => {
         if (signal.aborted) return;
-        await this.processHistoryData(history, account, emit, signal, socket.user?.id);
+        await this.processHistoryData(history, account, emit, signal, socket.user?.id, socket.user?.lid);
       }).catch(() => this.logger.error(`WhatsApp history persistence failed for account ${account.id}`));
       return historyWrites;
     };
@@ -193,7 +193,9 @@ export class BaileysProvider implements WhatsAppProvider {
         notify({ type: 'wa.qr', accountId: account.id, tenantId: account.tenantId, qr: update.qr });
       }
       if (update.connection === 'open') {
-        notify({ type: 'wa.connection', accountId: account.id, tenantId: account.tenantId, status: 'connected', phoneNumber: socket.user?.id });
+        notify({ type: 'wa.connection', accountId: account.id, tenantId: account.tenantId, status: 'connected', phoneNumber: socket.user?.id,
+          ownJid: socket.user?.id ? jidNormalizedUser(socket.user.id) : undefined,
+          ownLid: socket.user?.lid ? jidNormalizedUser(socket.user.lid) : undefined });
         void (async () => {
           try {
             const participating = await socket.groupFetchAllParticipating();
@@ -229,7 +231,7 @@ export class BaileysProvider implements WhatsAppProvider {
       for (const message of update.messages) this.rememberPoll(account.id, message, socket.user?.id);
       for (const message of update.messages) {
         try {
-          const normalized = this.normalizeMessage(account.id, account.tenantId, message, socket.user?.id);
+          const normalized = this.normalizeMessage(account.id, account.tenantId, message, socket.user?.id, socket.user?.lid);
           if (normalized) notify({ type: 'wa.message.in', accountId: account.id, tenantId: account.tenantId, message: normalized });
         } catch {
           this.logger.error('Message normalization failed');
@@ -370,8 +372,8 @@ export class BaileysProvider implements WhatsAppProvider {
     });
   }
 
-  private normalizeMessage(accountId: string, tenantId: string, message: WAMessage, ownJid?: string) {
-    const normalized = normalizeBaileysMessage(accountId, tenantId, message, ownJid);
+  private normalizeMessage(accountId: string, tenantId: string, message: WAMessage, ownJid?: string, ownLid?: string) {
+    const normalized = normalizeBaileysMessage(accountId, tenantId, message, ownJid, ownLid);
     const content = extractMessageContent(message.message) ?? message.message;
     const update = content?.pollUpdateMessage;
     const pollId = update?.pollCreationMessageKey?.id;
@@ -407,7 +409,8 @@ export class BaileysProvider implements WhatsAppProvider {
     account: ProviderAccount,
     emit: (event: ProviderEvent) => Promise<void>,
     signal: AbortSignal,
-    ownJid?: string
+    ownJid?: string,
+    ownLid?: string
   ): Promise<void> {
     if (!history.chats.length && !history.contacts.length && !history.messages.length) return;
     const { id: accountId, tenantId } = account;
@@ -460,7 +463,7 @@ export class BaileysProvider implements WhatsAppProvider {
           const id = message.key.id;
           if (!id) continue;
           try {
-            const normalized = this.normalizeMessage(accountId, tenantId, message, ownJid);
+            const normalized = this.normalizeMessage(accountId, tenantId, message, ownJid, ownLid);
             if (!normalized) continue;
             if (message.message) {
               this.cacheMessage(accountId, id, message.message);

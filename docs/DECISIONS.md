@@ -1,5 +1,12 @@
 # Hala CRM decisions
 
+## Contact identity and sender names (2026-11-19)
+
+- Message `pushName`, `senderPn` and `senderLid` identify the sender. On outgoing direct messages they must never rename or alias the recipient. Validate the same rule again in inbound persistence so queued older events cannot reintroduce the corruption.
+- Self-chat presentation is account-specific. Compare the conversation contact's primary WhatsApp identity with the connected account's verified PN/LID identities; do not infer ownership from a saved name or a tenant-wide `isSelf` flag. Persist the account's own normalized identities from the active provider connection. Reserved legacy self labels on unrelated contacts fall back to a verified name or phone number.
+- Correct only confirmed affected production contact fields, with scoped preconditions, an encrypted before-image and an audit entry. Do not merge/delete conversations or messages, guess missing names from message text, or rewrite other contacts merely because names coincide.
+- Verification: lint, typecheck, the full test suite and builds pass. Regression coverage includes outgoing PN/LID sender metadata, old queued events, shared contacts viewed under different accounts, namespace collisions and removal of a previous account owner's identity on relink. A production dry run confirms three affected contacts; one retains another available name and two fall back to their phone numbers. Eight available cached history batches contained no further verified names for these targets.
+
 ## Compact mobile inbox (2026-11-19)
 
 - At the user's request, move the mobile navigation into a modal side drawer, keep search and an icon-only new-conversation action on one row, and put a compact account-color selector beside the inbox title. The selector retains account labels, phone numbers and the selected state in its popup; color never becomes the only accessible identifier. Desktop navigation remains inline.

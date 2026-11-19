@@ -48,13 +48,15 @@ export class InboxService {
     return contacts.map(contact => contact._id);
   }
 
-  private async conversationView(record: ConversationDoc, principal: Principal): Promise<ConversationView> {
+  private async conversationView(record: ConversationDoc, principal: Principal, account?: WhatsAppAccountRecord): Promise<ConversationView> {
     const contact = await this.contacts.findOne({ _id: record.contactId, tenantId: record.tenantId }).lean();
+    const identity = account ?? await this.accounts.findOne({ _id: record.accountId, tenantId: principal.tenantId })
+      .select('phoneNumber ownJid ownLid').lean();
     const canReadCall = principal.ability.can('read', subject('Call', {
       tenantId: record.tenantId.toString(), accountId: record.accountId.toString()
     }));
     return { _id: record._id.toString(), tenantId: record.tenantId.toString(), accountId: record.accountId.toString(),
-      contactId: record.contactId.toString(), contactName: contactDisplayName(contact ? { ...contact, isSelf: Boolean(contact.isSelf || contact.displayName === 'أنت (رسائل شخصية)') } : {}),
+      contactId: record.contactId.toString(), contactName: contactDisplayName(contact ?? {}, identity ?? {}),
       contactWaId: contact?.waId ?? '', contactPhoneE164: contact?.phoneE164,
       contactAbout: record.contactAbout, commonGroups: [],
       profileStatus: record.profileStatus, profileCheckedAt: record.profileCheckedAt?.toISOString(),
@@ -75,7 +77,7 @@ export class InboxService {
       conditions.push({ $or: [{ lastMessageType: { $ne: 'system' } },
         { $and: [{ lastCallAt: { $exists: true } }, accessibleBy(principal.ability, 'read').ofType('Call')] }] });
     } else filter['lastMessageType'] = { $ne: 'system' };
-    const activeAccounts = await this.accounts.find({ tenantId: principal.tenantId }).select('_id').lean();
+    const activeAccounts = await this.accounts.find({ tenantId: principal.tenantId }).select('_id phoneNumber ownJid ownLid').lean();
     const accountIds = activeAccounts.map(account => account._id);
     filter['accountId'] = { $in: query.accountId
       ? accountIds.filter(id => id.toString() === query.accountId) : accountIds };
@@ -120,7 +122,8 @@ export class InboxService {
     const records = [...new Map([...byMessage, ...byCall].map(record => [record._id.toString(), record])).values()]
       .sort((a, b) => activityAt(b).getTime() - activityAt(a).getTime() || b._id.toString().localeCompare(a._id.toString()));
     const selected = records.slice(0, query.limit);
-    const views = await Promise.all(selected.map(record => this.conversationView(record, principal)));
+    const accountMap = new Map(activeAccounts.map(account => [account._id.toString(), account]));
+    const views = await Promise.all(selected.map(record => this.conversationView(record, principal, accountMap.get(record.accountId.toString()))));
     const last = selected.at(-1);
     return { items: views, nextCursor: records.length > query.limit && last ? `${activityAt(last).getTime()}_${last._id.toString()}` : null };
   }
@@ -372,7 +375,8 @@ export class InboxService {
     if (query.accountId) filter['accountId'] = new Types.ObjectId(query.accountId);
     if (query.conversationId) filter['conversationId'] = new Types.ObjectId(query.conversationId);
 
-    const activeAccounts = await this.accounts.find({ tenantId: principal.tenantId }).select('_id').lean();
+    const activeAccounts = await this.accounts.find({ tenantId: principal.tenantId }).select('_id phoneNumber ownJid ownLid').lean();
+    const accountMap = new Map(activeAccounts.map(account => [account._id.toString(), account]));
     const accountIds = activeAccounts.map(account => account._id);
     if (!filter['accountId']) {
       filter['accountId'] = { $in: accountIds };
@@ -410,7 +414,7 @@ export class InboxService {
           mediaId: record.mediaId?.toString(),
           status: record.status
         },
-        contactName: contactDisplayName(contact ? { ...contact, isSelf: Boolean(contact.isSelf || contact.displayName === 'أنت (رسائل شخصية)') } : {}),
+        contactName: contactDisplayName(contact ?? {}, accountMap.get(record.accountId.toString()) ?? {}),
         contactWaId: contact?.waId ?? '',
         contactPhoneE164: contact?.phoneE164
       };

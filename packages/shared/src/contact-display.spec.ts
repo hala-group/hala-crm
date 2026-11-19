@@ -19,4 +19,14 @@ describe('contact display name', () => {
     expect(contactPhoneNumber('lid@71722363576571')).toBeNull();
     expect(contactPhoneNumber('status@broadcast')).toBeNull();
   });
+
+  it('determines self chat from the source account rather than a saved name or shared flag', () => {
+    const contact = { waId: '201001234567@s.whatsapp.net', isSelf: true, displayName: 'أنت (رسائل شخصية)', pushName: 'الاسم الصحيح' };
+    expect(contactDisplayName(contact, { phoneNumber: '201001234567' })).toBe('أنت (رسائل شخصية)');
+    expect(contactDisplayName(contact, { phoneNumber: '201009999999' })).toBe('الاسم الصحيح');
+    expect(contactDisplayName(contact, { phoneNumber: '201001234567', ownJid: '201009999999@s.whatsapp.net' })).toBe('الاسم الصحيح');
+    expect(contactDisplayName({ ...contact, pushName: 'أنت' }, { phoneNumber: '201009999999' })).toBe('+201001234567');
+    expect(contactDisplayName({ ...contact, waId: '201001234567@lid' }, { ownJid: '201001234567@s.whatsapp.net' })).toBe('الاسم الصحيح');
+    expect(contactDisplayName({ ...contact, waId: '777777777777@lid' }, { ownLid: '777777777777:2@lid' })).toBe('أنت (رسائل شخصية)');
+  });
 });

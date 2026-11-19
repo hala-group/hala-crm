@@ -3,6 +3,7 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import { connect, connection, disconnect, Types } from 'mongoose';
 import { type DomainEvent, type MessageType, type NormalizedInboundMessage } from '@hala/shared';
 import { InboundProcessor } from './inbound.processor.js';
+import { MongoSessionRepository } from '../session/mongo-session.repository.js';
 
 describe('inbound persistence', () => {
   let mongo: MongoMemoryServer;
@@ -88,6 +89,62 @@ describe('inbound persistence', () => {
     expect((await db.collection('contacts').findOne({ _id: groupId }))?.['displayName']).toBe('المبيعات');
     expect(events.find(event => event.type === 'message.created' && event.message.waMessageId === 'group-with-sender'))
       .toMatchObject({ message: { sender: { name: 'اسم العضو', contactId: member?._id.toString() }, text: 'تفاصيل الطلب' } });
+  });
+
+  it('ignores stale outgoing sender names and aliases without merging the recipient into self', async () => {
+    const db = connection.db!;
+    const ownContactId = new Types.ObjectId(), recipientId = new Types.ObjectId();
+    const lid = '999999111111@lid', jid = '201001111111@s.whatsapp.net';
+    await db.collection('contacts').insertMany([
+      { _id: ownContactId, tenantId, waId: '201009999998@s.whatsapp.net', lid, isSelf: true, displayName: 'اسم المالك' },
+      { _id: recipientId, tenantId, waId: jid, pushName: 'اسم العميل الصحيح', isGroup: false }
+    ]);
+    await processor.process({ tenantId: tenantId.toString(), accountId: accountId.toString(), waMessageId: 'stale-out-name',
+      waId: jid, lid, pushName: 'اسم المالك', direction: 'out', isGroup: false, type: 'text', text: 'Reply', timestamp: new Date() });
+    expect(await db.collection('messages').findOne({ tenantId, accountId, waMessageId: 'stale-out-name' })).toMatchObject({ contactId: recipientId });
+    const recipient = await db.collection('contacts').findOne({ tenantId, _id: recipientId });
+    expect(recipient?.['pushName']).toBe('اسم العميل الصحيح');
+    expect(recipient?.['lid']).toBeUndefined();
+    expect(events.find(event => event.type === 'conversation.updated' && event.conversation.contactId === recipientId.toString()))
+      .toMatchObject({ conversation: { contactName: 'اسم العميل الصحيح' } });
+    expect((await db.collection('contacts').findOne({ tenantId, _id: ownContactId }))?.['displayName']).toBe('اسم المالك');
+  });
+
+  it('scopes self presentation to each account and keeps saved contact names intact', async () => {
+    const db = connection.db!;
+    const selfAccount = new Types.ObjectId();
+    await db.collection('whatsapp_accounts').insertOne({ _id: selfAccount, tenantId, phoneNumber: '201002222223', ownLid: '222222222223@lid' });
+    const input: NormalizedInboundMessage = { tenantId: tenantId.toString(), accountId: selfAccount.toString(),
+      waId: '201002222223@s.whatsapp.net', waMessageId: 'own-scoped-1', isSelf: true, isGroup: false,
+      direction: 'out', pushName: 'أنت', type: 'text', timestamp: new Date() };
+    await processor.syncContact({ tenantId: input.tenantId, accountId: input.accountId,
+      contact: { id: input.waId, name: 'اسم محفوظ للحساب' } });
+    await processor.process(input);
+    await processor.process({ ...input, accountId: accountId.toString(), waMessageId: 'other-scoped-1', isSelf: false, direction: 'in', pushName: undefined });
+    const contact = await db.collection('contacts').findOne({ tenantId, waId: input.waId });
+    expect(contact?.['displayName']).toBe('اسم محفوظ للحساب');
+    const ownEvents = events.filter(event => event.type === 'conversation.updated' && event.conversation.contactId === contact?._id.toString());
+    expect(ownEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ accountId: selfAccount.toString(), conversation: expect.objectContaining({ contactName: 'أنت (رسائل شخصية)' }) }),
+      expect.objectContaining({ accountId: accountId.toString(), conversation: expect.objectContaining({ contactName: 'اسم محفوظ للحساب' }) })
+    ]));
+  });
+
+  it('does not keep a previous account owner LID after a new identity connects', async () => {
+    const db = connection.db!, relinkedId = new Types.ObjectId();
+    await db.collection('whatsapp_accounts').insertOne({ _id: relinkedId, tenantId,
+      ownJid: '201003333330@s.whatsapp.net', ownLid: '333333333330@lid' });
+    const repository = new MongoSessionRepository(connection);
+    await repository.update({ type: 'wa.connection', tenantId: tenantId.toString(), accountId: relinkedId.toString(),
+      status: 'connected', phoneNumber: '201003333331@s.whatsapp.net', ownJid: '201003333331@s.whatsapp.net' }, 'test-worker');
+    const account = await db.collection('whatsapp_accounts').findOne({ _id: relinkedId, tenantId });
+    expect(account?.['ownLid']).toBeUndefined();
+    expect(account?.['ownJid']).toBe('201003333331@s.whatsapp.net');
+    await processor.process({ tenantId: tenantId.toString(), accountId: relinkedId.toString(),
+      waId: '333333333330@lid', lid: '333333333330@lid', isSelf: true, waMessageId: 'old-owner',
+      isGroup: false, direction: 'in', type: 'text', timestamp: new Date() });
+    const event = events.find(item => item.type === 'conversation.updated' && item.accountId === relinkedId.toString());
+    expect(event).toMatchObject({ conversation: { contactName: 'رقم غير متاح · معرّف 3330' } });
   });
 
   it('stores media bytes outside MongoDB and remains idempotent', async () => {
