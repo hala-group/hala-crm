@@ -113,7 +113,8 @@ describe('inbound persistence', () => {
   it('scopes self presentation to each account and keeps saved contact names intact', async () => {
     const db = connection.db!;
     const selfAccount = new Types.ObjectId();
-    await db.collection('whatsapp_accounts').insertOne({ _id: selfAccount, tenantId, phoneNumber: '201002222223', ownLid: '222222222223@lid' });
+    await db.collection('whatsapp_accounts').insertOne({ _id: selfAccount, tenantId, phoneNumber: '201002222223',
+      ownJid: '201002222223@s.whatsapp.net', ownLid: '222222222223@lid' });
     const input: NormalizedInboundMessage = { tenantId: tenantId.toString(), accountId: selfAccount.toString(),
       waId: '201002222223@s.whatsapp.net', waMessageId: 'own-scoped-1', isSelf: true, isGroup: false,
       direction: 'out', pushName: 'أنت', type: 'text', timestamp: new Date() };

@@ -13,6 +13,25 @@ const statusLabels: Record<MessageView['status'], string> = {
 
 export function messageTypeLabel(type: MessageType): string { return typeLabels[type]; }
 export function messageStatusLabel(status: MessageView['status']): string { return statusLabels[status]; }
+
+export function messageDayKey(timestamp: string): string | null {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return null;
+  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+}
+
+export function messageDayLabel(timestamp: string, now = new Date()): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return '';
+  const dayOrdinal = (value: Date) => Math.floor(Date.UTC(value.getFullYear(), value.getMonth(), value.getDate()) / 86_400_000);
+  const difference = dayOrdinal(now) - dayOrdinal(date);
+  if (difference === 0) return 'اليوم';
+  if (difference === 1) return 'أمس';
+  return new Intl.DateTimeFormat('ar-EG-u-nu-latn', {
+    day: 'numeric', month: 'long', year: 'numeric'
+  }).format(date);
+}
+
 export function visibleMessages(messages: MessageView[]): MessageView[] {
   return messages.filter(message => message.type !== 'reaction').reverse();
 }

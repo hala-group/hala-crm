@@ -2,12 +2,14 @@ import { expect, test, type Page } from '@playwright/test';
 
 const accountId = '507f1f77bcf86cd799439011';
 const secondAccountId = '507f1f77bcf86cd799439012';
+const providerCapabilities = ['text', 'image', 'video', 'audio', 'voice', 'document', 'sticker', 'location',
+  'contacts', 'reaction', 'poll', 'reply', 'mentions', 'edit', 'revoke', 'forward'];
 const accounts = [
-  { _id: accountId, label: 'رقم المبيعات', phoneNumber: '+201000000001', color: '#0284c7', status: 'connected' },
-  { _id: secondAccountId, label: 'خدمة العملاء', phoneNumber: '+201000000002', color: '#9333ea', status: 'connected' }
+  { _id: accountId, label: 'رقم المبيعات', phoneNumber: '+201000000001', color: '#0284c7', status: 'connected', capabilities: providerCapabilities },
+  { _id: secondAccountId, label: 'خدمة العملاء', phoneNumber: '+201000000002', color: '#9333ea', status: 'connected', capabilities: providerCapabilities }
 ];
 
-async function openInbox(page: Page, viewer = false) {
+async function openInbox(page: Page, viewer = false, includeTimelineMessages = false) {
   await page.route('**/socket.io/**', route => route.abort());
   await page.route('**/api/v1/**', async route => {
     const url = new URL(route.request().url());
@@ -18,7 +20,7 @@ async function openInbox(page: Page, viewer = false) {
       name: 'مالك النظام', email: 'layout@example.test', status: 'active',
       role: { id: '507f1f77bcf86cd799439015', name: viewer ? 'Viewer' : 'Owner',
         permissions: viewer ? ['conversations:read', 'calls:read'] : ['conversations:read', 'conversations:read_all',
-          'accounts:access_all', 'accounts:create', 'users:read', 'calls:read', 'messages:send'] },
+          'conversations:archive', 'contacts:read', 'accounts:access_all', 'accounts:create', 'users:read', 'calls:read', 'messages:send'] },
       accountMemberships: [{ accountId, level: viewer ? 'view' : 'manage' }] };
     else if (path === '/whatsapp/accounts') body = viewer ? accounts.slice(0, 1) : accounts;
     else if (path === '/tags') body = { tags: [] };
@@ -29,11 +31,33 @@ async function openInbox(page: Page, viewer = false) {
       body = { nextCursor: null, items: Array.from({ length: 16 }, (_, index) => ({
         _id: `607f1f77bcf86cd7994390${String(index).padStart(2, '0')}`, tenantId: '507f1f77bcf86cd799439014',
         accountId: selected || (index % 2 ? secondAccountId : accountId), contactId: '707f1f77bcf86cd799439011',
-        contactName: index ? `عميل تجريبي ${index}` : 'أحمد محمد', contactWaId: '201000000000@s.whatsapp.net',
+        contactName: index === 0 ? 'أحمد محمد' : index === 1 ? '+201000000000' : `عميل تجريبي ${index}`,
+        contactWaId: '201000000000@s.whatsapp.net',
         status: 'open', lastMessageAt: '2026-11-19T08:00:00Z', lastMessagePreview: 'مرحباً، أريد الاستفسار عن الطلب',
         lastMessageType: 'text', lastMessageDirection: 'in', unreadCount: index % 3 ? 0 : 2
       })) };
-    } else if (path.includes('/avatar')) return route.fulfill({ status: 404 });
+    } else if (path.endsWith('/profile/refresh')) {
+      body = { _id: path.split('/')[2], tenantId: '507f1f77bcf86cd799439014', accountId,
+        contactId: '707f1f77bcf86cd799439011', contactName: 'أحمد محمد', contactWaId: '201000000000@s.whatsapp.net',
+        status: 'open', lastMessageAt: '2026-11-19T08:00:00Z', lastMessagePreview: 'مرحباً، أريد الاستفسار عن الطلب',
+        lastMessageType: 'text', lastMessageDirection: 'in', unreadCount: 0 };
+    } else if (/^\/conversations\/[^/]+\/messages$/.test(path)) {
+      if (!includeTimelineMessages) body = { items: [], nextCursor: null };
+      else {
+        const now = new Date();
+        const todayAtNine = new Date(now); todayAtNine.setHours(9, 0, 0, 0);
+        const todayAtEight = new Date(now); todayAtEight.setHours(8, 0, 0, 0);
+        const yesterdayAtNine = new Date(now); yesterdayAtNine.setDate(now.getDate() - 1); yesterdayAtNine.setHours(21, 0, 0, 0);
+        const conversationId = path.split('/')[2]!;
+        body = { nextCursor: null, items: [
+          { _id: '807f1f77bcf86cd799439003', waMessageId: 'today-late', timestamp: todayAtNine.toISOString(), text: 'رسالة اليوم الثانية', forwarded: true },
+          { _id: '807f1f77bcf86cd799439002', waMessageId: 'today-early', timestamp: todayAtEight.toISOString(), text: 'رسالة اليوم الأولى' },
+          { _id: '807f1f77bcf86cd799439001', waMessageId: 'yesterday', timestamp: yesterdayAtNine.toISOString(), text: 'رسالة الأمس' }
+        ].map(message => ({ ...message, tenantId: '507f1f77bcf86cd799439014', accountId, conversationId,
+          contactId: '707f1f77bcf86cd799439011', direction: 'in', type: 'text', status: 'delivered' })) };
+      }
+    }
+    else if (path.includes('/avatar')) return route.fulfill({ status: 404 });
     await route.fulfill({ json: body });
   });
   await page.goto('/inbox');
@@ -65,6 +89,85 @@ for (const width of [320, 390, 720]) {
     await expect(page.getByRole('button', { name: 'محادثة جديدة', exact: true })).toHaveAttribute('aria-expanded', 'true');
   });
 }
+
+test('conversation actions are grouped in the three-dot menu and restore focus', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openInbox(page);
+  await page.locator('.conversation').first().click();
+
+  const trigger = page.locator('.thread-actions-menu summary');
+  const panel = page.locator('.thread-actions-panel');
+  await expect(trigger).toBeVisible();
+  await trigger.click();
+  await expect(panel.getByRole('button', { name: 'بحث في هذه المحادثة' })).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'أرشفة المحادثة' })).toBeVisible();
+  await expect(panel.getByRole('button', { name: /تحديد ك(?:مقروء|غير مقروء)/ })).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'بيانات جهة الاتصال' })).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await expect(panel).toBeHidden();
+  await expect(trigger).toBeFocused();
+
+  await trigger.click();
+  await panel.getByRole('button', { name: 'بيانات جهة الاتصال' }).click();
+  await expect(page.locator('#contact-details')).toBeVisible();
+  await page.locator('#contact-details').getByRole('button', { name: 'إغلاق بيانات جهة الاتصال' }).click();
+  await expect(trigger).toBeFocused();
+});
+
+test('conversation action menu respects role permissions', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openInbox(page, true);
+  await page.locator('.conversation').first().click();
+  const trigger = page.locator('.thread-actions-menu summary');
+  await trigger.click();
+  const panel = page.locator('.thread-actions-panel');
+  await expect(panel.getByRole('button', { name: 'بحث في هذه المحادثة' })).toBeVisible();
+  await expect(panel.getByRole('button', { name: /تحديد ك(?:مقروء|غير مقروء)/ })).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'أرشفة المحادثة' })).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: 'بيانات جهة الاتصال' })).toHaveCount(0);
+});
+
+test('phone conversation names keep the plus sign before the digits in RTL', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openInbox(page);
+
+  const phoneName = page.locator('.conversation-title-group strong').nth(1);
+  await expect(phoneName).toHaveText('+201000000000');
+  await expect(phoneName).toHaveAttribute('dir', 'auto');
+  expect(await phoneName.evaluate(element => getComputedStyle(element).direction)).toBe('ltr');
+  const characterPositions = await phoneName.evaluate(element => {
+    const text = element.firstChild!;
+    const plus = document.createRange();
+    plus.setStart(text, 0);
+    plus.setEnd(text, 1);
+    const firstDigit = document.createRange();
+    firstDigit.setStart(text, 1);
+    firstDigit.setEnd(text, 2);
+    return { plus: plus.getBoundingClientRect().left, firstDigit: firstDigit.getBoundingClientRect().left };
+  });
+  expect(characterPositions.plus).toBeLessThan(characterPositions.firstDigit);
+
+  await page.locator('.conversation').nth(1).click();
+  const threadPhoneName = page.locator('.thread-title h2');
+  await expect(threadPhoneName).toHaveText('+201000000000');
+  await expect(threadPhoneName).toHaveAttribute('dir', 'auto');
+  expect(await threadPhoneName.evaluate(element => getComputedStyle(element).direction)).toBe('ltr');
+});
+
+test('message timeline groups messages under one WhatsApp-style day divider', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openInbox(page, false, true);
+  await page.locator('.conversation').first().click();
+
+  const dividers = page.locator('.message-day-divider');
+  await expect(dividers).toHaveCount(2);
+  await expect(dividers.nth(0)).toHaveText('أمس');
+  await expect(dividers.nth(1)).toHaveText('اليوم');
+  await expect(page.locator('.message')).toHaveCount(3);
+  await expect(page.getByRole('img', { name: 'رسالة محوّلة' })).toBeVisible();
+  await expect(page.getByText('رسالة محوّلة', { exact: true })).toHaveCount(0);
+});
 
 test('mobile drawer traps focus, closes with Escape, backdrop and navigation', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });

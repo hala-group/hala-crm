@@ -76,6 +76,33 @@ it('imports different chats concurrently while preserving each chat message orde
   }
 });
 
+it('resyncs saved phone contacts when an existing WhatsApp session opens', async () => {
+  const account = { id: new Types.ObjectId().toString(), tenantId: new Types.ObjectId().toString() };
+  const creds = initAuthCreds();
+  creds.me = { id: '201234567890@s.whatsapp.net', name: 'Hala CRM' };
+  const auth = { load: vi.fn().mockResolvedValue({ state: { creds, keys: { get: vi.fn(), set: vi.fn() } },
+    saveCreds: vi.fn() }) };
+  const provider = new BaileysProvider(auth as unknown as EncryptedAuthStateStore);
+  const ev = new EventEmitter();
+  const resyncAppState = vi.fn().mockResolvedValue(undefined);
+  const socket = { ev, end: vi.fn(), resyncAppState,
+    groupFetchAllParticipating: vi.fn().mockResolvedValue({}) } as unknown as WASocket;
+  vi.mocked(makeWASocket).mockReturnValueOnce(socket);
+  const emit = vi.fn(async (_event: ProviderEvent) => {});
+  const session = await provider.open(account, 1, emit);
+  try {
+    ev.emit('connection.update', { connection: 'open' });
+    await vi.waitFor(() => expect(resyncAppState).toHaveBeenCalledWith(['critical_unblock_low'], false));
+
+    ev.emit('contacts.upsert', [{ id: '201111111111@s.whatsapp.net', name: 'الاسم المحفوظ في الهاتف' }]);
+    await vi.waitFor(() => expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'wa.contact', contact: expect.objectContaining({ name: 'الاسم المحفوظ في الهاتف' })
+    })));
+  } finally {
+    await session.close();
+  }
+});
+
 it('replays recently accepted history notifications one batch at a time', async () => {
   const account = { id: new Types.ObjectId().toString(), tenantId: new Types.ObjectId().toString() };
   const creds = initAuthCreds();

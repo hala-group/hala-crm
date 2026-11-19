@@ -14,6 +14,7 @@ export class BaileysProvider implements WhatsAppProvider {
   readonly name = 'baileys';
   readonly capabilities: ReadonlySet<ProviderCapability> = new Set(BAILEYS_CAPABILITIES);
   private readonly sockets = new Map<string, WASocket>();
+  private readonly contactSyncs = new WeakSet<WASocket>();
   private readonly historySessions = new WeakMap<WASocket, { signal: AbortSignal; replay(): Promise<void> }>();
   private readonly importingHistory = new WeakSet<WASocket>();
   private readonly initialHistory = new InitialHistorySync();
@@ -196,6 +197,13 @@ export class BaileysProvider implements WhatsAppProvider {
         notify({ type: 'wa.connection', accountId: account.id, tenantId: account.tenantId, status: 'connected', phoneNumber: socket.user?.id,
           ownJid: socket.user?.id ? jidNormalizedUser(socket.user.id) : undefined,
           ownLid: socket.user?.lid ? jidNormalizedUser(socket.user.lid) : undefined });
+        if (!syncFullHistory && !this.contactSyncs.has(socket)) {
+          this.contactSyncs.add(socket);
+          void socket.resyncAppState(['critical_unblock_low'], false).catch(() => {
+            this.contactSyncs.delete(socket);
+            this.logger.warn(`WhatsApp saved contacts sync failed for account ${account.id}`);
+          });
+        }
         void (async () => {
           try {
             const participating = await socket.groupFetchAllParticipating();

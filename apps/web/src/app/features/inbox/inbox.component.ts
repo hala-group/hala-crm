@@ -34,14 +34,18 @@ import { DatePipe } from '@angular/common';
 import {
   conversationPreview,
   conversationTimeFormat,
+  messageDayKey,
+  messageDayLabel,
   messageStatusLabel,
   messageTypeLabel,
   missingMessageContent,
   visibleMessages,
 } from './message-display';
 
-type TimelineEntry = { kind: 'message'; id: string; timestamp: string; message: MessageView }
+type TimelineContentEntry = { kind: 'message'; id: string; timestamp: string; message: MessageView }
   | { kind: 'call'; id: string; timestamp: string; call: CallView };
+type TimelineEntry = TimelineContentEntry
+  | { kind: 'date'; id: string; timestamp: string; label: string; firstInTimeline: boolean };
 
 function fallbackAccountColor(id: string): string {
   const colors = ['#008069', '#0284c7', '#9333ea', '#d97706', '#db2777', '#4f46e5'];
@@ -171,7 +175,7 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
               @for (result of inbox.messageSearchResults(); track result.message._id) {
                 <button type="button" class="search-result-item" (click)="openMessageResult(result)">
                   <div class="result-top">
-                    <strong>{{ result.contactName }}</strong>
+                    <strong dir="auto">{{ result.contactName }}</strong>
                     <small>{{ result.message.timestamp | date: 'dd/MM/yyyy HH:mm' }}</small>
                   </div>
                   <p class="result-snippet">{{ result.message.text || result.message.caption }}</p>
@@ -259,7 +263,7 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
                 <span class="conversation-main">
                   <span class="conversation-topline">
                     <span class="conversation-title-group">
-                      <strong>{{ item.contactName }}</strong>
+                      <strong dir="auto">{{ item.contactName }}</strong>
                       @if (!accountId() && accounts.accounts().length > 1) {
                         <span class="account-badge" [title]="'مرتبط بـ: ' + accountLabel(item.accountId)">{{ accountLabel(item.accountId) }}</span>
                       }
@@ -459,7 +463,7 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
               <hala-contact-avatar class="thread" [conversation]="conversation" aria-hidden="true" />
               <div class="thread-title">
                 <div class="thread-title-row">
-                  <h2>{{ conversation.contactName }}</h2>
+                  <h2 dir="auto">{{ conversation.contactName }}</h2>
                   @if (accounts.accounts().length > 1) {
                     <span class="account-badge thread-account-badge" [title]="'الرقم المرتبط: ' + accountLabel(conversation.accountId)">{{ accountLabel(conversation.accountId) }}</span>
                   }
@@ -475,90 +479,63 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
               @if (conversation.status === 'archived') {
                 <span class="archived-badge">مؤرشفة</span>
               }
-              <button
-                class="quiet-button icon-button"
-                type="button"
-                (click)="toggleInChatSearch()"
-                [class.active]="inChatSearchOpen()"
-                aria-label="بحث في هذه المحادثة"
-                title="بحث في هذه المحادثة"
-              >
-                <svg
-                  aria-hidden="true"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.8"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
+              <details #threadActionsMenu class="thread-actions-menu">
+                <summary
+                  #threadActionsTrigger
+                  class="quiet-button icon-button"
+                  aria-label="خيارات المحادثة"
+                  title="خيارات المحادثة"
+                  aria-controls="thread-actions-panel"
                 >
-                  <circle cx="11" cy="11" r="8" />
-                  <path d="m21 21-4.35-4.35" />
-                </svg>
-              </button>
-              <button
-                class="quiet-button icon-button"
-                type="button"
-                (click)="toggleArchiveConversation(conversation)"
-                [attr.aria-label]="conversation.status === 'archived' ? 'إلغاء الأرشفة' : 'أرشفة المحادثة'"
-                [title]="conversation.status === 'archived' ? 'إلغاء الأرشفة' : 'أرشفة المحادثة'"
-              >
-                <svg
-                  aria-hidden="true"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.8"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <rect width="20" height="5" x="2" y="3" rx="1" />
-                  <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4" />
-                </svg>
-              </button>
-              <button
-                class="quiet-button icon-button"
-                type="button"
-                (click)="toggleReadStatus(conversation)"
-                [attr.aria-label]="conversation.unreadCount > 0 ? 'تحديد كمقروء' : 'تحديد كغير مقروء'"
-                [title]="conversation.unreadCount > 0 ? 'تحديد كمقروء' : 'تحديد كغير مقروء'"
-              >
-                <svg
-                  aria-hidden="true"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.8"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <circle cx="12" cy="12" r="4" [attr.fill]="conversation.unreadCount > 0 ? 'none' : 'currentColor'" />
-                  <path d="M21.5 12a9.5 9.5 0 1 1-19 0 9.5 9.5 0 0 1 19 0Z" />
-                </svg>
-              </button>
-              <button
-                #contactInfoButton
-                class="quiet-button icon-button contact-info-button"
-                type="button"
-                (click)="openContactDetails()"
-                [attr.aria-expanded]="showContactDetails()"
-                aria-controls="contact-details"
-                aria-label="عرض بيانات جهة الاتصال"
-                title="بيانات جهة الاتصال"
-              >
-                <svg
-                  aria-hidden="true"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.8"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <circle cx="12" cy="8" r="3.5" />
-                  <path d="M5 21a7 7 0 0 1 14 0M19 5h3m-1.5-1.5v3" />
-                </svg>
-              </button>
+                  <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor">
+                    <circle cx="12" cy="5" r="1.8" />
+                    <circle cx="12" cy="12" r="1.8" />
+                    <circle cx="12" cy="19" r="1.8" />
+                  </svg>
+                </summary>
+                <div id="thread-actions-panel" class="thread-actions-panel">
+                  @if (permissions.can('conversations:read', conversation.accountId)) {
+                    <button class="thread-action-item" type="button"
+                      (click)="closeThreadActionsMenu(); toggleInChatSearch()"
+                      [attr.aria-pressed]="inChatSearchOpen()">
+                      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
+                      </svg>
+                      <span>بحث في هذه المحادثة</span>
+                    </button>
+                  }
+                  @if (permissions.can('conversations:archive', conversation.accountId)) {
+                    <button class="thread-action-item" type="button"
+                      (click)="closeThreadActionsMenu(); toggleArchiveConversation(conversation)">
+                      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <rect width="20" height="5" x="2" y="3" rx="1" />
+                        <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4" />
+                      </svg>
+                      <span>{{ conversation.status === 'archived' ? 'إلغاء الأرشفة' : 'أرشفة المحادثة' }}</span>
+                    </button>
+                  }
+                  @if (permissions.can('conversations:read', conversation.accountId)) {
+                    <button class="thread-action-item" type="button"
+                      (click)="closeThreadActionsMenu(); toggleReadStatus(conversation)">
+                      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="4" [attr.fill]="conversation.unreadCount > 0 ? 'none' : 'currentColor'" />
+                        <path d="M21.5 12a9.5 9.5 0 1 1-19 0 9.5 9.5 0 0 1 19 0Z" />
+                      </svg>
+                      <span>{{ conversation.unreadCount > 0 ? 'تحديد كمقروء' : 'تحديد كغير مقروء' }}</span>
+                    </button>
+                  }
+                  @if (permissions.can('contacts:read', conversation.accountId)) {
+                    <button class="thread-action-item contact-info-action" type="button"
+                      (click)="closeThreadActionsMenu(); openContactDetails()"
+                      [attr.aria-expanded]="showContactDetails()" aria-controls="contact-details">
+                      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="8" r="3.5" /><path d="M5 21a7 7 0 0 1 14 0M19 5h3m-1.5-1.5v3" />
+                      </svg>
+                      <span>بيانات جهة الاتصال</span>
+                    </button>
+                  }
+                </div>
+              </details>
             </div>
           </div>
           @if (inChatSearchOpen()) {
@@ -624,7 +601,11 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
                 </div>
               }
               @for (entry of timelineItems(); track entry.id) {
-                @if (entry.kind === 'call') {
+                @if (entry.kind === 'date') {
+                  <div class="message-day-divider" [class.first-in-timeline]="entry.firstInTimeline" role="separator">
+                    <span>{{ entry.label }}</span>
+                  </div>
+                } @else if (entry.kind === 'call') {
                   <div class="call-timeline-entry" [class.missed]="entry.call.status === 'missed'">
                     <span aria-hidden="true">☎</span>
                     <strong>{{ callLabel(entry.call) }}</strong>
@@ -653,7 +634,24 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
                   @if (message.text) {
                     <p>{{ message.text }}</p>
                   }
-                  @if (message.forwarded) { <p class="message-detail-line">رسالة محوّلة</p> }
+                  @if (message.forwarded) {
+                    <p class="message-detail-line forwarded-message-indicator">
+                      <svg
+                        role="img"
+                        aria-label="رسالة محوّلة"
+                        title="رسالة محوّلة"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <path d="m14 5 7 7-7 7" />
+                        <path d="M21 12H10a6 6 0 0 0-6 6v1" />
+                      </svg>
+                    </p>
+                  }
                   @if (message.mentions?.length) { <p class="message-detail-line">إشارات: {{ message.mentions.length }}</p> }
                   @if (message.type === 'location' && message.location) {
                     <p class="message-detail-line">
@@ -863,7 +861,7 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
                   @if (forwardId() === message._id) {
                     <select #targets multiple aria-label="محادثات التحويل">
                       @for (target of inbox.items(); track target._id) {
-                        <option [value]="target._id">{{ target.contactName }}</option>
+                        <option [value]="target._id" dir="auto">{{ target.contactName }}</option>
                       }
                     </select>
                     <button type="button" (click)="forward(message, targets)">تحويل</button>
@@ -1046,31 +1044,22 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
               </button>
               <h3>الوسائط والمستندات</h3>
             } @else { <h3>معلومات جهة الاتصال</h3> }
-            @if (showContactDetails() && detailsPanel() === 'contact') {
-              <button
-                #detailsCloseButton
-                class="quiet-button icon-button"
-                type="button"
-                (click)="closeContactDetails()"
-                aria-label="إغلاق بيانات جهة الاتصال"
-              >
-                <svg
-                  aria-hidden="true"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                >
-                  <path d="m6 6 12 12M18 6 6 18" />
-                </svg>
-              </button>
-            }
+            <button
+              #detailsCloseButton
+              class="quiet-button icon-button details-close-button"
+              type="button"
+              (click)="closeContactDetails()"
+              aria-label="إغلاق بيانات جهة الاتصال"
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <path d="m6 6 12 12M18 6 6 18" />
+              </svg>
+            </button>
           </div>
           @if (detailsPanel() === 'contact') {
             <div class="contact-profile">
               <hala-contact-avatar class="detail" [conversation]="conversation" aria-hidden="true" />
-              <strong class="contact-name">{{ conversation.contactName }}</strong>
+              <strong class="contact-name" dir="auto">{{ conversation.contactName }}</strong>
               <span>{{ conversation.contactPhoneE164 || contactPhoneNumber(conversation.contactWaId) || 'جهة اتصال واتساب' }}</span>
             </div>
 
@@ -2216,6 +2205,70 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
         flex-wrap: wrap;
         gap: 0.5rem;
       }
+      .thread-actions-menu {
+        position: relative;
+        flex: none;
+      }
+      .thread-actions-menu[open] {
+        z-index: 120;
+      }
+      .thread-actions-menu summary {
+        list-style: none;
+        cursor: pointer;
+      }
+      .thread-actions-menu summary::-webkit-details-marker {
+        display: none;
+      }
+      .thread-actions-menu summary:focus-visible {
+        outline: 2px solid var(--wa-green);
+        outline-offset: 2px;
+      }
+      .thread-actions-panel {
+        position: absolute;
+        inset-block-start: calc(100% + 0.35rem);
+        inset-inline-end: 0;
+        z-index: 120;
+        display: grid;
+        width: max-content;
+        min-width: 13rem;
+        max-width: min(19rem, calc(100vw - 1rem));
+        padding: 0.3rem;
+        border: 1px solid var(--line);
+        border-radius: 0.65rem;
+        background: #fff;
+        box-shadow: 0 8px 24px #0b141a26;
+      }
+      .thread-action-item {
+        display: flex;
+        width: 100%;
+        min-width: 0;
+        min-height: 2.65rem;
+        align-items: center;
+        gap: 0.65rem;
+        padding: 0.55rem 0.65rem;
+        border: 0;
+        border-radius: 0.4rem;
+        background: transparent;
+        color: var(--ink);
+        cursor: pointer;
+        font: inherit;
+        font-size: 0.85rem;
+        text-align: start;
+      }
+      .thread-action-item:hover,
+      .thread-action-item:focus-visible {
+        background: #f1f5f4;
+      }
+      .thread-action-item:focus-visible {
+        outline: 2px solid var(--wa-green);
+        outline-offset: -2px;
+      }
+      .thread-action-item svg {
+        width: 1.15rem;
+        height: 1.15rem;
+        flex: none;
+        color: var(--accent);
+      }
       .thread-controls label {
         display: grid;
         gap: 0.2rem;
@@ -2249,7 +2302,7 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
         width: 1.2rem;
         height: 1.2rem;
       }
-      .contact-info-button {
+      .thread-action-item.contact-info-action {
         display: none;
       }
       .messages {
@@ -2264,6 +2317,25 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
         min-height: 100%;
         width: min(100%, 56rem);
         margin-inline: auto;
+      }
+      .message-day-divider {
+        display: flex;
+        flex: none;
+        justify-content: center;
+        margin-block: 0.75rem 0.45rem;
+      }
+      .message-day-divider.first-in-timeline {
+        margin-block-start: auto;
+      }
+      .message-day-divider span {
+        padding: 0.28rem 0.7rem;
+        border: 1px solid #dfe5e7;
+        border-radius: 999px;
+        background: #fff;
+        color: #54656f;
+        box-shadow: 0 1px 1px #0b141a12;
+        font-size: 0.72rem;
+        line-height: 1.35;
       }
       .older-messages {
         align-self: center;
@@ -2412,6 +2484,9 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
         align-items: center;
         gap: 0.4rem;
         margin-top: 0.2rem;
+      }
+      .message .forwarded-message-indicator {
+        min-height: 1.05rem;
       }
       .message-detail-line svg {
         flex: none;
@@ -2808,6 +2883,12 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
         border-block-end: 1px solid #e9edef;
         background: var(--wa-header);
       }
+      .details-heading .details-close-button {
+        display: none;
+      }
+      .details.open .details-heading .details-close-button {
+        display: grid;
+      }
       .details-heading h3 {
         margin: 0;
         text-align: start;
@@ -2872,8 +2953,8 @@ export function getTagColor(tag: string): { bg: string; text: string; border: st
         .inbox > aside.details:not(.open) {
           display: none !important;
         }
-        .contact-info-button {
-          display: grid;
+        .thread-action-item.contact-info-action {
+          display: flex;
         }
         .details-backdrop {
           position: absolute;
@@ -3088,13 +3169,13 @@ export class InboxComponent implements OnInit {
     return this.inbox.highlightMessageId() === messageId;
   }
   private readonly accountFilter = viewChild<ElementRef<HTMLDetailsElement>>('accountFilter');
+  private readonly threadActionsMenu = viewChild<ElementRef<HTMLDetailsElement>>('threadActionsMenu');
+  private readonly threadActionsTrigger = viewChild<ElementRef<HTMLElement>>('threadActionsTrigger');
   private readonly messagesPane = viewChild<ElementRef<HTMLDivElement>>('messagesPane');
   private messageFlowObserver: ResizeObserver | null = null;
   private followLatestConversationId: string | null = null;
   private readonly contactDetailsCloseButton =
     viewChild<ElementRef<HTMLButtonElement>>('detailsCloseButton');
-  private readonly contactInfoButton =
-    viewChild<ElementRef<HTMLButtonElement>>('contactInfoButton');
   readonly selected = computed(() =>
     this.inbox.items().find((item) => item._id === this.inbox.selectedId()),
   );
@@ -3103,13 +3184,25 @@ export class InboxComponent implements OnInit {
     this.activityTime(b).localeCompare(this.activityTime(a))));
   readonly timelineItems = computed<TimelineEntry[]>(() => {
     const selected = this.selected();
-    const messages: TimelineEntry[] = this.displayMessages().map(message =>
+    const messages: TimelineContentEntry[] = this.displayMessages().map(message =>
       ({ kind: 'message', id: `message:${message._id}`, timestamp: message.timestamp, message }));
     if (!selected) return messages;
-    const calls: TimelineEntry[] = this.calls.items()
+    const calls: TimelineContentEntry[] = this.calls.items()
       .filter(call => call.accountId === selected.accountId && call.contactId === selected.contactId)
       .map(call => ({ kind: 'call', id: `call:${call._id}`, timestamp: call.startedAt, call }));
-    return [...messages, ...calls].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    const sorted = [...messages, ...calls].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    const timeline: TimelineEntry[] = [];
+    let previousDay: string | null = null;
+    for (const entry of sorted) {
+      const day = messageDayKey(entry.timestamp);
+      if (day && day !== previousDay) {
+        timeline.push({ kind: 'date', id: `date:${day}`, timestamp: entry.timestamp,
+          label: messageDayLabel(entry.timestamp), firstInTimeline: timeline.length === 0 });
+        previousDay = day;
+      }
+      timeline.push(entry);
+    }
+    return timeline;
   });
   latestCall(conversation: ConversationView): CallView | undefined {
     if (!conversation.lastCallAt || conversation.lastCallAt < conversation.lastMessageAt) return undefined;
@@ -3158,7 +3251,14 @@ export class InboxComponent implements OnInit {
   accountLabel(id: string): string {
     return this.accounts.accounts().find((account) => account._id === id)?.label ?? 'رقم واتساب';
   }
+  closeThreadActionsMenu(restoreFocus = false): void {
+    const menu = this.threadActionsMenu()?.nativeElement;
+    if (!menu?.open) return;
+    menu.open = false;
+    if (restoreFocus) this.threadActionsTrigger()?.nativeElement.focus();
+  }
   openContactDetails(): void {
+    this.closeThreadActionsMenu();
     this.detailsPanel.set('contact');
     this.showContactDetails.set(true);
     const id = this.selected()?._id;
@@ -3209,7 +3309,9 @@ export class InboxComponent implements OnInit {
     if (!this.showContactDetails()) return;
     this.showContactDetails.set(false);
     this.detailsPanel.set('contact');
-    afterNextRender(() => this.contactInfoButton()?.nativeElement.focus(), {
+    const trigger = this.threadActionsTrigger()?.nativeElement;
+    trigger?.focus();
+    afterNextRender(() => trigger?.focus(), {
       injector: this.injector,
     });
   }
@@ -3655,6 +3757,10 @@ export class InboxComponent implements OnInit {
 
   onDocumentClick(event: MouseEvent): void {
     const target = event.target as HTMLElement | null;
+    const threadActionsMenu = this.threadActionsMenu()?.nativeElement;
+    if (threadActionsMenu?.open && !target?.closest('.thread-actions-menu')) {
+      threadActionsMenu.open = false;
+    }
     if (this.activeMessageId() && !target?.closest('.message')) {
       this.activeMessageId.set(null);
     }
@@ -3668,6 +3774,10 @@ export class InboxComponent implements OnInit {
   }
 
   onEscape(): void {
+    if (this.threadActionsMenu()?.nativeElement.open) {
+      this.closeThreadActionsMenu(true);
+      return;
+    }
     const accountFilter = this.accountFilter()?.nativeElement;
     if (accountFilter?.open) {
       accountFilter.open = false;
