@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, OnInit, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, DestroyRef, inject, OnInit, signal } from '@angular/core';
 import { FormField, form } from '@angular/forms/signals';
 import { createAccountSchema, type AccountLevel, type AccountView } from '@hala/shared';
 import { AccountsStore } from './accounts.store';
@@ -290,7 +290,7 @@ const PRESET_COLORS = [
                   <button
                     type="button"
                     class="btn-action-primary"
-                    [disabled]="syncingId() === account._id"
+                    [disabled]="syncingId() === account._id || !!account.cleanup"
                     (click)="syncHistory(account._id)"
                     title="طلب استيراد سجل الرسائل والدردشات من الهاتف"
                   >
@@ -308,7 +308,7 @@ const PRESET_COLORS = [
                   type="button"
                   class="btn-action-primary btn-action-qr"
                   *halaHasPermission="'accounts:connect'"
-                  [disabled]="connectingId() === account._id"
+                  [disabled]="connectingId() === account._id || !!account.cleanup"
                   (click)="handleQrConnect(account._id)"
                   title="مسح رمز الاستجابة السريعة QR للربط"
                 >
@@ -350,6 +350,7 @@ const PRESET_COLORS = [
                 <button
                   type="button"
                   class="btn-action-more"
+                  [disabled]="!!account.cleanup"
                   (click)="toggleMenu(account._id, $event)"
                   aria-label="المزيد من الإجراءات"
                   title="المزيد من الإجراءات"
@@ -386,8 +387,8 @@ const PRESET_COLORS = [
                         </svg>
                         <span>تسجيل خروج واتساب</span>
                       </button>
-
-                      @if (account.provider === 'baileys' && account.status === 'connected') {
+                    }
+                      @if (account.provider === 'baileys' && permissions.can('accounts:update', account._id)) {
                         <button
                           type="button"
                           class="menu-item"
@@ -399,7 +400,6 @@ const PRESET_COLORS = [
                           <span>مسح الدردشات وإعادة الربط</span>
                         </button>
                       }
-                    }
 
                     @if (permissions.can('accounts:delete', account._id)) {
                       <div class="menu-divider"></div>
@@ -418,6 +418,21 @@ const PRESET_COLORS = [
                 }
               </div>
             </div>
+            @if (account.cleanup; as cleanup) {
+              <div class="alert" [class.alert-notice]="cleanup.state !== 'failed'" role="status" aria-live="polite">
+                <span>
+                  @if (cleanup.state === 'failed') {
+                    تعذر إكمال الحذف. حُفظ التقدم ويمكن إعادة المحاولة.
+                  } @else {
+                    {{ cleanup.operation === 'delete' ? 'جارٍ حذف الرقم وبياناته…' : 'جارٍ مسح الدردشات…' }}
+                  }
+                  {{ cleanup.processedMedia }} / {{ cleanup.totalMedia }} مرفق
+                </span>
+                @if (cleanup.state === 'failed' && permissions.can(cleanup.operation === 'delete' ? 'accounts:delete' : 'accounts:update', account._id)) {
+                  <button class="btn-action-secondary" type="button" (click)="cleanup.operation === 'delete' ? remove(account) : clearChats(account)">إعادة المحاولة</button>
+                }
+              </div>
+            }
           </article>
         } @empty {
           <div class="empty-state">
@@ -1692,6 +1707,27 @@ export class AccountsComponent implements OnInit {
   ngOnInit(): void {
     void this.accounts.load().catch(() => this.error.set('تعذر تحميل الأرقام.'));
     void this.usersStore.load().catch(() => {});
+    const timer = setInterval(() => { void this.pollCleanup(); }, 3000);
+    this.destroyRef.onDestroy(() => clearInterval(timer));
+  }
+
+  private readonly destroyRef = inject(DestroyRef);
+  private pollingCleanup = false;
+
+  private async pollCleanup(): Promise<void> {
+    const pending = this.accounts.accounts().filter(account => account.cleanup && account.cleanup.state !== 'failed');
+    if (this.pollingCleanup || !pending.length) return;
+    this.pollingCleanup = true;
+    try {
+      await this.accounts.refresh();
+      for (const previous of pending) {
+        const current = this.accounts.accounts().find(account => account._id === previous._id);
+        if (!current) this.notice.set(`تم حذف الرقم «${previous.label}» وبياناته بنجاح.`);
+        else if (!current.cleanup) this.notice.set('اكتمل مسح الدردشات. امسح رمز QR لربط الرقم من جديد.');
+      }
+    } catch {
+      this.error.set('تعذر تحديث تقدم الحذف. ستتم إعادة المحاولة تلقائيًا.');
+    } finally { this.pollingCleanup = false; }
   }
 
   toggleCreatePanel(event: Event): void {
@@ -1871,7 +1907,7 @@ export class AccountsComponent implements OnInit {
     this.notice.set('');
     try {
       await this.accounts.clearChats(account._id);
-      this.notice.set('حُذفت المحادثات وبدأ ربط الرقم من جديد. امسح رمز QR الذي يظهر.');
+      this.notice.set('بدأ مسح الدردشات في الخلفية. يمكنك متابعة التقدم في بطاقة الرقم.');
       this.error.set('');
     } catch {
       this.error.set('تعذر مسح المحادثات أو إعادة تشغيل الربط.');
@@ -1912,7 +1948,7 @@ export class AccountsComponent implements OnInit {
     try {
       await this.accounts.remove(account._id);
       this.error.set('');
-      this.notice.set(`تم حذف الرقم «${account.label}» بنجاح.`);
+      this.notice.set('بدأ حذف الرقم وبياناته في الخلفية. يمكنك متابعة التقدم في بطاقته.');
     } catch {
       this.error.set('تعذر حذف الرقم.');
     }

@@ -13,6 +13,7 @@ import { type UserRecord } from '../users/user.schema.js';
 import { AccountCommandService } from './account-command.service.js';
 import { type AccountMemberRecord, type WaAuthStateRecord, type WhatsAppAccountRecord } from './account.schema.js';
 import { createStorageRegistry } from '@hala/shared/storage';
+import { cleanupMedia, type CleanupProgress } from './cleanup-media.js';
 
 @Injectable()
 export class AccountsService {
@@ -31,12 +32,17 @@ export class AccountsService {
   ) {}
   private readonly storage = createStorageRegistry();
 
+  private assertNotCleaning(account: WhatsAppAccountRecord): void {
+    if (account.cleanup) throw new ConflictException('Account cleanup must finish before changing its connection');
+  }
+
   private view(account: WhatsAppAccountRecord & { _id: Types.ObjectId }): AccountView {
     return {
       _id: account._id.toString(), tenantId: account.tenantId.toString(), label: account.label,
       color: account.color, phoneNumber: account.phoneNumber, provider: account.provider,
       status: account.status, desiredState: account.desiredState, assignedWorkerId: account.assignedWorkerId,
-      lastError: account.lastError, capabilities: [...(account.provider === 'cloud_api' ? CLOUD_API_CAPABILITIES : BAILEYS_CAPABILITIES)]
+      lastError: account.lastError, cleanup: account.cleanup,
+      capabilities: [...(account.provider === 'cloud_api' ? CLOUD_API_CAPABILITIES : BAILEYS_CAPABILITIES)]
     };
   }
 
@@ -88,6 +94,7 @@ export class AccountsService {
 
   async update(principal: Principal, id: string, input: UpdateAccountInput): Promise<AccountView> {
     const account = await this.get(principal, id, 'update');
+    this.assertNotCleaning(account);
     account.set(input);
     await account.save();
     await this.audit.record(principal.id, 'account.update', 'WhatsAppAccount', id);
@@ -96,6 +103,7 @@ export class AccountsService {
 
   async setConnection(principal: Principal, id: string, operation: 'connect' | 'disconnect' | 'logout') {
     const account = await this.get(principal, id, 'connect');
+    this.assertNotCleaning(account);
     account.desiredState = operation === 'connect' ? 'connected' : 'disconnected';
     if (operation === 'connect') account.status = 'connecting';
     if (operation === 'disconnect') account.status = 'disconnected';
@@ -114,6 +122,7 @@ export class AccountsService {
 
   async syncHistory(principal: Principal, id: string): Promise<{ accepted: true }> {
     const account = await this.get(principal, id, 'connect');
+    this.assertNotCleaning(account);
     if (account.provider !== 'baileys') throw new UnprocessableEntityException('History import requires a linked WhatsApp account');
     if (account.status !== 'connected' || account.desiredState !== 'connected') throw new ConflictException('Account must be connected');
     if (!(await this.commands.send({ type: 'sync_history', accountId: id, tenantId: principal.tenantId }))) {
@@ -123,10 +132,9 @@ export class AccountsService {
     return { accepted: true };
   }
 
-  async clearChats(principal: Principal, id: string): Promise<{ deleted: { conversations: number; messages: number; media: number } }> {
+  async clearChats(principal: Principal, id: string, progress?: CleanupProgress): Promise<{ deleted: { conversations: number; messages: number; media: number } }> {
     const account = await this.get(principal, id, 'update');
     if (account.provider !== 'baileys') throw new UnprocessableEntityException('History reimport requires a linked WhatsApp account');
-    if (account.status !== 'connected' || account.desiredState !== 'connected') throw new ConflictException('Account must be connected');
     const tenantId = new Types.ObjectId(principal.tenantId);
 
     // Stop the live session before deleting data so an active history request cannot refill it.
@@ -137,27 +145,29 @@ export class AccountsService {
     if (!(await this.commands.waitUntilStopped(id, 15_000))) throw new ConflictException('Account session is still stopping');
     await this.authStates.deleteMany({ tenantId: account.tenantId, accountId: account._id });
 
-    const mediaRecords = await this.media.find({ tenantId, accountId: account._id }).select('storageKey thumbnailKey storageDriver').lean();
-    for (const asset of mediaRecords) {
-      const storage = this.storage.forDriver(asset['storageDriver'] as 'local' | 's3' | 'hostinger');
-      await storage.delete(asset['storageKey'] as string);
-      if (asset['thumbnailKey']) await storage.delete(asset['thumbnailKey'] as string);
-    }
-    await this.media.deleteMany({ tenantId, accountId: account._id });
+    const mediaCount = await cleanupMedia(this.media, this.storage, { tenantId, accountId: account._id },
+      account.cleanup?.totalMedia, progress);
     const [messageResult, conversationResult] = await Promise.all([
       this.messages.deleteMany({ tenantId, accountId: account._id }),
       this.conversations.deleteMany({ tenantId, accountId: account._id }),
       this.accounts.db.collection('pending_message_mutations').deleteMany({ tenantId, accountId: account._id })
     ]);
     await this.accounts.db.collection('history_cursors').deleteMany({ tenantId, accountId: account._id });
-    account.desiredState = 'connected';
-    account.status = 'connecting';
-    await account.save();
     await this.audit.record(principal.id, 'account.logout', 'WhatsAppAccount', id);
     await this.audit.record(principal.id, 'account.connect', 'WhatsAppAccount', id);
     await this.audit.record(principal.id, 'account.chats.clear', 'WhatsAppAccount', id,
-      { conversations: conversationResult.deletedCount, messages: messageResult.deletedCount, media: mediaRecords.length });
-    return { deleted: { conversations: conversationResult.deletedCount, messages: messageResult.deletedCount, media: mediaRecords.length } };
+      { conversations: conversationResult.deletedCount, messages: messageResult.deletedCount, media: mediaCount });
+    if (account.cleanup) {
+      const completed = await this.accounts.updateOne({ _id: account._id, 'cleanup.id': account.cleanup.id }, {
+        $set: { desiredState: 'connected', status: 'connecting' }, $unset: { cleanup: '' }
+      });
+      if (!completed.matchedCount) throw new ConflictException('Account cleanup was superseded');
+    } else {
+      account.desiredState = 'connected';
+      account.status = 'connecting';
+      await account.save();
+    }
+    return { deleted: { conversations: conversationResult.deletedCount, messages: messageResult.deletedCount, media: mediaCount } };
   }
 
   async getQr(principal: Principal, id: string): Promise<{ qr: string | null }> {
@@ -166,20 +176,14 @@ export class AccountsService {
     return { qr };
   }
 
-  async remove(principal: Principal, id: string): Promise<{ ok: true }> {
+  async remove(principal: Principal, id: string, progress?: CleanupProgress): Promise<{ ok: true }> {
     const account = await this.get(principal, id, 'delete');
     const dataScope = { tenantId: account.tenantId, accountId: account._id };
     account.desiredState = 'disconnected';
     await account.save();
     await this.commands.send({ type: 'disconnect', accountId: id, tenantId: principal.tenantId });
-    if (!(await this.commands.waitUntilStopped(id))) throw new ConflictException('Account session is still stopping');
-    const mediaRecords = await this.media.find(dataScope).select('storageKey thumbnailKey storageDriver').lean();
-    for (const asset of mediaRecords) {
-      const storage = this.storage.forDriver(asset['storageDriver'] as 'local' | 's3' | 'hostinger');
-      await storage.delete(asset['storageKey'] as string);
-      if (asset['thumbnailKey']) await storage.delete(asset['thumbnailKey'] as string);
-    }
-    await this.media.deleteMany(dataScope);
+    if (!(await this.commands.waitUntilStopped(id, 15_000))) throw new ConflictException('Account session is still stopping');
+    const mediaCount = await cleanupMedia(this.media, this.storage, dataScope, account.cleanup?.totalMedia, progress);
     const [messageResult, conversationResult] = await Promise.all([
       this.messages.deleteMany(dataScope), this.conversations.deleteMany(dataScope)
     ]);
@@ -192,11 +196,12 @@ export class AccountsService {
     const affected = await this.members.find({ accountId: account._id }).lean();
     await this.members.deleteMany(dataScope);
     await this.authStates.deleteMany(dataScope);
-    await this.accounts.deleteOne({ _id: account._id, tenantId: account.tenantId });
     for (const member of affected) await this.access.invalidate(principal.tenantId, member.userId.toString(), id);
-    await this.bus.publish({ type: 'account.deleted', tenantId: principal.tenantId, accountId: id });
     await this.audit.record(principal.id, 'account.delete', 'WhatsAppAccount', id,
-      { conversations: conversationResult.deletedCount, messages: messageResult.deletedCount, media: mediaRecords.length });
+      { conversations: conversationResult.deletedCount, messages: messageResult.deletedCount, media: mediaCount });
+    await this.accounts.deleteOne({ _id: account._id, tenantId: account.tenantId,
+      ...(account.cleanup ? { 'cleanup.id': account.cleanup.id } : {}) });
+    await this.bus.publish({ type: 'account.deleted', tenantId: principal.tenantId, accountId: id });
     return { ok: true };
   }
 

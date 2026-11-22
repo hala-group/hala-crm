@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
-import { Injectable, Logger, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { accessibleBy } from '@casl/mongoose';
 import { type Model, Types } from 'mongoose';
@@ -79,6 +79,7 @@ export class MediaUploadService {
     if (!account || !principal.ability.can('send_media', subject('Message', { tenantId: principal.tenantId, accountId }))) {
       throw new NotFoundException('Account not found');
     }
+    if (account.cleanup) throw new ConflictException('Account cleanup in progress');
     const capabilities = account.provider === 'baileys' ? BAILEYS_CAPABILITIES : CLOUD_API_CAPABILITIES;
     if (!capabilities.includes(kind)) throw new UnprocessableEntityException({ code: 'UNSUPPORTED_BY_PROVIDER', capability: kind });
     const limitKey = kind === 'voice' ? 'AUDIO' : kind === 'sticker' ? 'IMAGE' : kind === 'document' ? 'DOC' : kind.toUpperCase();

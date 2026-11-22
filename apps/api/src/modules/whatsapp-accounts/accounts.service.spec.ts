@@ -25,8 +25,10 @@ describe('WhatsApp account chat reset', () => {
     } as unknown as Model<Record<string, unknown>>;
     const messages = { deleteMany: vi.fn(async () => { lifecycle.push('delete-messages'); return { deletedCount: 7 }; })
     } as unknown as Model<Record<string, unknown>>;
-    const media = { find: vi.fn(() => ({ select: () => ({ lean: async () => [{ storageKey: 'test/original', thumbnailKey: 'test/thumb' }] }) })),
-      deleteMany: vi.fn(async () => { lifecycle.push('delete-media'); })
+    let mediaRemaining = 1;
+    const media = { find: vi.fn(() => ({ sort: () => ({ limit: () => ({ select: () => ({ lean: async () => [{ storageKey: 'test/original', thumbnailKey: 'test/thumb' }] }) }) }) })),
+      countDocuments: vi.fn(async () => mediaRemaining),
+      deleteOne: vi.fn(async () => { mediaRemaining--; lifecycle.push('delete-media'); })
     } as unknown as Model<Record<string, unknown>>;
     const members = { find: vi.fn(() => ({ lean: async () => [] })),
       deleteMany: vi.fn(async () => { lifecycle.push('delete-members'); })
@@ -66,15 +68,15 @@ describe('WhatsApp account chat reset', () => {
     const actorId = new Types.ObjectId();
     const lifecycle: string[] = [];
     const account = {
-      _id: accountId, tenantId, label: 'Support', provider: 'baileys', status: 'connected',
-      desiredState: 'connected', save: vi.fn(async () => { lifecycle.push(`save:${account.status}`); })
+      _id: accountId, tenantId, label: 'Support', provider: 'baileys', status: 'disconnected',
+      desiredState: 'disconnected', save: vi.fn(async () => { lifecycle.push(`save:${account.status}`); })
     } as unknown as WhatsAppAccountRecord & { _id: Types.ObjectId; save: () => Promise<void> };
     const accounts = {
       findOne: vi.fn(async () => account),
       db: { collection: vi.fn(() => ({ deleteMany: vi.fn(async () => { lifecycle.push('clear-cursors'); }) })) }
     } as unknown as Model<WhatsAppAccountRecord>;
     const media = {
-      find: vi.fn(() => ({ select: () => ({ lean: async () => [] }) })),
+      countDocuments: vi.fn(async () => 0),
       deleteMany: vi.fn(async () => { lifecycle.push('delete-media-records'); })
     } as unknown as Model<Record<string, unknown>>;
     const messages = { deleteMany: vi.fn(async () => { lifecycle.push('delete-messages'); return { deletedCount: 7 }; }) } as unknown as Model<Record<string, unknown>>;

@@ -45,6 +45,7 @@ export class OutboundProcessor {
     if (!contact?.['waId']) throw new Error('Outbound contact missing');
     const account = await db.collection('whatsapp_accounts').findOne({ _id: accountId, tenantId });
     if (!account) throw new Error('Outbound account missing');
+    if (account['cleanup']) return;
     const jid = contact['waId'] as string;
     const isGroup = Boolean(contact['isGroup'] || conversation['isGroup']);
     try {

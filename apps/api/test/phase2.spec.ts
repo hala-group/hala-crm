@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { type INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
@@ -13,6 +13,7 @@ import { type TenantRecord } from '../src/modules/tenants/tenant.schema.js';
 import { type RoleRecord } from '../src/modules/roles/role.schema.js';
 import { type UserRecord } from '../src/modules/users/user.schema.js';
 import { RedisBusService } from '../src/modules/access/redis-bus.service.js';
+import { AccountCleanupService } from '../src/modules/whatsapp-accounts/account-cleanup.service.js';
 
 interface LoginResult { accessToken: string }
 interface AccountResult { _id: string; label: string }
@@ -27,6 +28,8 @@ describe('Phase 2 account and Socket isolation', () => {
   let readerId: string;
   let accountId: string;
   let bus: RedisBusService;
+  let cleanup: AccountCleanupService;
+  const cleanupTasks: Parameters<AccountCleanupService['process']>[0][] = [];
   let baseUrl: string;
   const sockets: Socket[] = [];
 
@@ -41,6 +44,9 @@ describe('Phase 2 account and Socket isolation', () => {
     app.use(cookieParser());
     app.setGlobalPrefix('api/v1');
     await app.listen(0);
+    cleanup = module.get(AccountCleanupService);
+    Reflect.set(cleanup, 'queue', { close: vi.fn(async () => {}),
+      add: vi.fn(async (_name: string, task: Parameters<AccountCleanupService['process']>[0]) => { cleanupTasks.push(task); }) });
     const address = app.getHttpServer().address() as { port: number };
     baseUrl = `http://127.0.0.1:${address.port}`;
     bus = module.get(RedisBusService);
@@ -175,7 +181,9 @@ describe('Phase 2 account and Socket isolation', () => {
     const updated = new Promise<void>(resolve => owner.once('access:updated', () => resolve()));
     const response = await request(app.getHttpServer()).delete(`/api/v1/whatsapp/accounts/${accountId}`)
       .set('Authorization', `Bearer ${ownerToken}`);
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(202);
+    expect(response.body.accepted).toBe(true);
+    await cleanup.process(cleanupTasks[0]!);
     await updated;
     const list = await request(app.getHttpServer()).get('/api/v1/whatsapp/accounts').set('Authorization', `Bearer ${ownerToken}`);
     expect((list.body as AccountResult[])).toHaveLength(19);

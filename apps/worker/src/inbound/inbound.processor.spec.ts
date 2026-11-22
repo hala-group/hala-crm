@@ -27,6 +27,17 @@ describe('inbound persistence', () => {
   }, 60_000);
   afterAll(async () => { await disconnect(); await mongo?.stop(); });
 
+  it('does not refill an account whose cleanup is queued or failed', async () => {
+    const id = new Types.ObjectId();
+    await connection.db!.collection('whatsapp_accounts').insertOne({ _id: id, tenantId, cleanup: { state: 'failed' } });
+    await processor.process({ tenantId: tenantId.toString(), accountId: id.toString(), waMessageId: 'during-cleanup',
+      waId: '201001234567@s.whatsapp.net', isGroup: false, direction: 'in', type: 'text', text: 'queued history', timestamp: new Date() });
+    expect(await connection.db!.collection('messages').countDocuments({ tenantId, accountId: id })).toBe(0);
+    await processor.syncContact({ tenantId: tenantId.toString(), accountId: id.toString(),
+      contact: { id: '201001234567@s.whatsapp.net', name: 'During cleanup' }, historyChat: { unreadCount: 1, timestamp: new Date() } });
+    expect(await connection.db!.collection('conversations').countDocuments({ tenantId, accountId: id })).toBe(0);
+  });
+
   it('persists all normalized types once with a central contact and no duplicate unread count', async () => {
     const types: MessageType[] = ['text', 'image', 'video', 'audio', 'voice', 'document', 'sticker', 'location',
       'contacts', 'reaction', 'poll', 'poll_vote', 'template', 'interactive', 'system', 'unknown'];

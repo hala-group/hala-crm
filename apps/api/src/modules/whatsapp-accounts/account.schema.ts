@@ -42,6 +42,11 @@ export const accountSchema = new Schema<WhatsAppAccountRecord>({
   status: { type: String, enum: ['created', 'qr_pending', 'connecting', 'connected', 'disconnected', 'logged_out', 'error'], default: 'created' },
   desiredState: { type: String, enum: ['connected', 'disconnected'], default: 'disconnected' },
   assignedWorkerId: String, leaseUpdatedAt: Date, lastConnectedAt: Date, lastError: String,
+  cleanup: { type: new Schema({
+    id: String, operation: { type: String, enum: ['delete', 'clear'] },
+    state: { type: String, enum: ['queued', 'running', 'failed'] },
+    processedMedia: Number, totalMedia: Number, errorCode: String, requestedAt: String
+  }, { _id: false }), default: undefined },
   providerConfig: { phoneNumberId: String, wabaId: String, tokenEnc: String },
   settings: {
     autoReadReceipts: { type: Boolean, default: false },

@@ -28,6 +28,17 @@ export type AccountLevelInput = z.infer<typeof accountLevelSchema>;
 export type CreateAccountInput = z.infer<typeof createAccountSchema>;
 export type UpdateAccountInput = z.infer<typeof updateAccountSchema>;
 
+export interface AccountCleanupView {
+  id: string;
+  operation: 'delete' | 'clear';
+  state: 'queued' | 'running' | 'failed';
+  processedMedia: number;
+  totalMedia: number;
+  errorCode?: string;
+  requestedAt?: string;
+}
+export interface AccountCleanupAccepted { accepted: true; cleanup: AccountCleanupView }
+
 export interface AccountView {
   _id: string;
   tenantId: string;
@@ -39,5 +50,6 @@ export interface AccountView {
   desiredState: 'connected' | 'disconnected';
   assignedWorkerId?: string;
   lastError?: string;
+  cleanup?: AccountCleanupView;
   capabilities: string[];
 }

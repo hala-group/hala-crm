@@ -40,7 +40,7 @@ export class InboundProcessor {
     const accountId = new Types.ObjectId(event.accountId);
     const db = this.deps.connection.db!;
     const account = await db.collection('whatsapp_accounts').findOne({ _id: accountId, tenantId });
-    if (!account) return;
+    if (!account || account['cleanup']) return;
     const contacts = db.collection('contacts');
     const existing = await contacts.find({ tenantId, $or: [{ waId: { $in: ids } }, ...(lid ? [{ lid }] : [])] }).toArray();
     const name = contact.name?.trim();
@@ -172,6 +172,7 @@ export class InboundProcessor {
     const accountId = new Types.ObjectId(data.accountId);
     const account = await db.collection('whatsapp_accounts').findOne({ _id: accountId, tenantId });
     if (!account) throw new Error('Account missing or cross-tenant');
+    if (account['cleanup']) return;
     if (data.mutation) {
       const now = new Date();
       await db.collection<PendingMutation>('pending_message_mutations').updateOne(
@@ -334,6 +335,8 @@ export class InboundProcessor {
     if (!data.history || !data.mediaSource) return;
     const scope = { tenantId: new Types.ObjectId(data.tenantId), accountId: new Types.ObjectId(data.accountId) };
     const db = this.deps.connection.db!;
+    const account = await db.collection('whatsapp_accounts').findOne({ _id: scope.accountId, tenantId: scope.tenantId });
+    if (!account || account['cleanup']) return;
     const message = await db.collection('messages').findOne({ ...scope, waMessageId: data.waMessageId, revokedAt: null });
     if (!message?.['mediaId']) return;
     const asset = await db.collection('media').findOne({ ...scope, _id: message['mediaId'],
@@ -355,6 +358,10 @@ export class InboundProcessor {
       const bytes = await this.deps.download(source, data);
       // A queued attachment may have been removed while the transfer was in progress.
       if (!await media.findOne(filter, { projection: { _id: 1 } })) return;
+      const account = await this.deps.connection.db!.collection('whatsapp_accounts').findOne({
+        _id: filter.accountId, tenantId: filter.tenantId
+      });
+      if (!account || account['cleanup']) return;
       await this.deps.storage.put(key, bytes, source.mimeType);
       let thumbnailKey: string | undefined;
       if (source.kind === 'image' || source.kind === 'sticker') {

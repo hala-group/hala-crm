@@ -65,6 +65,10 @@ The worker is a Nest application context with no HTTP listener. TOTP enrollment 
 
 To exercise the Redis lease integration test against an already running Redis instance, set `REDIS_TEST_URL` to its URL before `pnpm test`. The test uses unique temporary keys and cleans them up. CI provides Redis automatically.
 
+## Account cleanup
+
+Account deletion and **مسح الدردشات وإعادة الربط** run as durable BullMQ cleanup jobs. Both DELETE endpoints return 202 with `{ accepted: true, cleanup }`; scoped account views include `cleanup.state`, `processedMedia`, `totalMedia` and a safe error code. The account card polls progress and disappears only after permanent deletion succeeds. Clear/reimport also works for disconnected Baileys accounts and requests a fresh QR after completion. Reconnect and history requests are blocked while cleanup exists. Each asset's database record is retained until its original and thumbnail have been deleted, so retries resume remaining work. The API consumes `account-cleanup` using the existing Redis and storage configuration; run at least one API instance to process it. Three attempts run automatically with backoff; the failed card permits explicit retry. Closing the browser does not cancel accepted work. Unexpected failures are logged with sanitized codes/source frames rather than message content or credentials.
+
 ## Cloud API
 
 Add a Cloud API number in **أرقام واتساب** with a phone number ID, WABA ID, and long-lived system-user access token. Hala encrypts the token with `ENCRYPTION_KEY_BASE64`. Set `CLOUD_GRAPH_VERSION`, `CLOUD_APP_SECRET`, and `CLOUD_WEBHOOK_VERIFY_TOKEN`; register `https://YOUR_HOST/api/v1/webhooks/whatsapp/cloud` with Meta and subscribe to messages and statuses. Connecting the number verifies Graph access. Approved templates and interactive messages are available in the composer only on Cloud API accounts. Other message types follow the provider capability matrix. Check your Meta app's supported Graph version before deployment.

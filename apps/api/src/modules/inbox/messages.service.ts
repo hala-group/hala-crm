@@ -45,6 +45,7 @@ export class MessagesService {
   private async account(principal: Principal, id: string) {
     const account = await this.accounts.findOne({ $and: [{ _id: id }, accessibleBy(principal.ability, 'read').ofType('WhatsAppAccount')] });
     if (!account) throw new NotFoundException('Account not found');
+    if (account.cleanup) throw new ConflictException('Account cleanup in progress');
     return account;
   }
 

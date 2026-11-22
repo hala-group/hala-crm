@@ -1,5 +1,12 @@
 # Hala CRM decisions
 
+## Durable account cleanup (2026-11-22)
+
+- Account deletion and clear/reimport now return HTTP 202 after queuing an authorized cleanup. Their progress is persisted on the account and exposed through the existing scoped account views; retrying a failed operation resumes remaining media records. Both connected and disconnected Baileys accounts can clear chats.
+- Operational extension to the spec: the API runs a BullMQ cleanup consumer alongside its HTTP entrypoint, reusing its existing scoped repositories, audit and storage registry. WhatsApp sessions remain exclusively in the WhatsApp worker and are stopped through its existing command/lease boundary. No new service, package or environment variable is required. BullMQ 6.7.1 package types are the source for worker lifecycle and retry options.
+- The account is locked against reconnect/history changes until cleanup finishes. Delete stored files with bounded concurrency and remove each media record only after all of its files were deleted; missing files are already idempotent in each storage adapter. Failed/pending assets are still cleaned because their status does not prove no remote file exists. Redis persists queued jobs across API restarts; completed jobs expire after one day. A failed account card offers explicit retry and retains the cleanup lock.
+- Successful clear/reimport requests a new QR pairing only after cleanup and audit finish. Internal jobs execute the tenant and CASL scope accepted when the destructive action was authorized, with no user credentials in job data. Unexpected HTTP errors log a sanitized error name and stack locations, never exception messages or request payloads.
+
 ## Contact identity and sender names (2026-11-19)
 
 - Message `pushName`, `senderPn` and `senderLid` identify the sender. On outgoing direct messages they must never rename or alias the recipient. Validate the same rule again in inbound persistence so queued older events cannot reintroduce the corruption.

@@ -1,21 +1,23 @@
-import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Put, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Inject, Param, Patch, Post, Put, Req } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { accountIdSchema, confirmClearChatsSchema, createAccountSchema, idParamsSchema, objectIdSchema, setAccountMemberSchema, updateAccountSchema,
   type CreateAccountInput, type UpdateAccountInput, type AccountLevel } from '@hala/shared';
 import { CheckPolicy } from '../../common/check-policy.decorator.js';
 import { type AuthenticatedRequest } from '../../common/auth.types.js';
 import { AccountsService } from './accounts.service.js';
+import { AccountCleanupService } from './account-cleanup.service.js';
 
 @ApiTags('whatsapp accounts')
 @ApiBearerAuth()
 @Controller('whatsapp/accounts')
 export class AccountsController {
-  constructor(@Inject(AccountsService) private readonly accounts: AccountsService) {}
+  constructor(@Inject(AccountsService) private readonly accounts: AccountsService,
+    @Inject(AccountCleanupService) private readonly cleanup: AccountCleanupService) {}
 
   @Get()
   @CheckPolicy('accounts:read')
   @ApiOperation({ summary: 'List only WhatsApp numbers accessible to this user' })
-  list(@Req() request: AuthenticatedRequest) { return this.accounts.list(request.principal); }
+  list(@Req() request: AuthenticatedRequest) { return this.cleanup.list(request.principal); }
 
   @Post()
   @CheckPolicy('accounts:create')
@@ -41,10 +43,11 @@ export class AccountsController {
   }
 
   @Delete(':id')
+  @HttpCode(202)
   @CheckPolicy('accounts:delete')
-  @ApiOperation({ summary: 'Delete a WhatsApp number and its session credentials' })
+  @ApiOperation({ summary: 'Queue permanent account cleanup; poll scoped account views for progress and retry DELETE after failure' })
   remove(@Req() request: AuthenticatedRequest, @Param({ schema: idParamsSchema }) params: { id: string }) {
-    return this.accounts.remove(request.principal, params.id);
+    return this.cleanup.start(request.principal, params.id, 'delete');
   }
 
   @Get(':id/qr')
@@ -76,11 +79,12 @@ export class AccountsController {
   }
 
   @Delete(':id/chats')
+  @HttpCode(202)
   @CheckPolicy('accounts:update')
-  @ApiOperation({ summary: 'Delete all conversations and messages for one WhatsApp number' })
+  @ApiOperation({ summary: 'Queue clear/reimport for a connected or disconnected Baileys account; poll scoped account cleanup progress' })
   clearChats(@Req() request: AuthenticatedRequest, @Param({ schema: idParamsSchema }) params: { id: string },
     @Body({ schema: confirmClearChatsSchema }) _body: { confirm: true }) {
-    return this.accounts.clearChats(request.principal, params.id);
+    return this.cleanup.start(request.principal, params.id, 'clear');
   }
 
   @Post(':id/logout')

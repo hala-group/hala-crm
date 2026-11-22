@@ -2,7 +2,7 @@ import { inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { signalStore, withMethods, withState, patchState } from '@ngrx/signals';
 import { firstValueFrom } from 'rxjs';
-import { type AccountView, type AccountLevel, type CreateAccountInput } from '@hala/shared';
+import { type AccountView, type AccountLevel, type CreateAccountInput, type AccountCleanupAccepted } from '@hala/shared';
 
 interface MemberVm { _id: string; userId: string; level: AccountLevel }
 interface QrView { accountId: string; image: string }
@@ -17,6 +17,9 @@ export const AccountsStore = signalStore(
       patchState(store, { loading: true });
       try { patchState(store, { accounts: await firstValueFrom(http.get<AccountView[]>('/api/v1/whatsapp/accounts')) }); }
       finally { patchState(store, { loading: false }); }
+    },
+    async refresh(): Promise<void> {
+      patchState(store, { accounts: await firstValueFrom(http.get<AccountView[]>('/api/v1/whatsapp/accounts')) });
     },
     async create(input: CreateAccountInput): Promise<void> {
       await firstValueFrom(http.post('/api/v1/whatsapp/accounts', input));
@@ -48,12 +51,14 @@ export const AccountsStore = signalStore(
       await firstValueFrom(http.post(`/api/v1/whatsapp/accounts/${id}/sync-history`, {}));
     },
     async clearChats(id: string): Promise<void> {
-      await firstValueFrom(http.delete(`/api/v1/whatsapp/accounts/${id}/chats`, { body: { confirm: true } }));
-      patchState(store, { accounts: await firstValueFrom(http.get<AccountView[]>('/api/v1/whatsapp/accounts')) });
+      const result = await firstValueFrom(http.delete<AccountCleanupAccepted>(`/api/v1/whatsapp/accounts/${id}/chats`, { body: { confirm: true } }));
+      patchState(store, { accounts: store.accounts().map(account => account._id === id
+        ? { ...account, desiredState: 'disconnected', cleanup: result.cleanup } : account) });
     },
     async remove(id: string): Promise<void> {
-      await firstValueFrom(http.delete(`/api/v1/whatsapp/accounts/${id}`));
-      patchState(store, { accounts: store.accounts().filter(account => account._id !== id) });
+      const result = await firstValueFrom(http.delete<AccountCleanupAccepted>(`/api/v1/whatsapp/accounts/${id}`));
+      patchState(store, { accounts: store.accounts().map(account => account._id === id
+        ? { ...account, desiredState: 'disconnected', cleanup: result.cleanup } : account) });
     },
     async select(id: string): Promise<void> {
       patchState(store, { selectedId: id, members: [] });
