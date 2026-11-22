@@ -4,7 +4,7 @@ Multi-tenant WhatsApp inbox with per-number authorization, call history, and hor
 
 On mobile, open the menu button for navigation and logout. Inbox search and the new-chat icon share one row. Tap the colored circle next to **البريد الوارد** to choose a number; the popup lists account labels, phone numbers and the current selection. The multicolor circle represents **كل الأرقام**. Existing account colors are reused, with stable fallback colors for accounts without one.
 
-Contact titles use saved WhatsApp contact names or incoming sender metadata. Outgoing echoes never rename or alias the recipient using the account owner's sender metadata. **أنت (رسائل شخصية)** applies only when the contact matches the source account's verified WhatsApp identity; shared contacts can have a different title under another account. Unavailable names fall back to a phone number rather than an unverified self label.
+Contact titles use saved WhatsApp contact names or incoming sender metadata. Outgoing echoes never rename or alias the recipient using the account owner's sender metadata. **أنت (رسائل شخصية)** applies only when the contact matches the source account's verified WhatsApp identity; shared contacts can have a different title under another account. Historical generated names such as **أنت (الرقم الحالي)** are ignored for other contacts, falling back to a real sender name or phone number.
 
 ## Message push
 

@@ -23,11 +23,17 @@ export function contactPhoneNumber(waId: string | null | undefined): string | nu
   return phoneJid ? `+${phoneJid[1]}` : null;
 }
 
+function isSyntheticSelfName(value: string): boolean {
+  const normalized = value.normalize('NFKC').replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '')
+    .replace(/\s+/g, ' ').trim();
+  return /^أنت(?:\s*\(\s*(?:رسائل شخصية|الرقم الحالي)\s*\))?$/u.test(normalized);
+}
+
 export function contactDisplayName(contact: ContactDisplayInput, account?: ContactAccountIdentity): string {
   if (account ? isOwnContact(contact, account) : contact.isSelf) return 'أنت (رسائل شخصية)';
   for (const candidate of [contact.displayName, contact.pushName]) {
     const name = candidate?.trim();
-    if (name && name !== 'أنت (رسائل شخصية)' && name !== 'أنت' && !/^[.\u2026]+$/u.test(name)) return name;
+    if (name && !isSyntheticSelfName(name) && !/^[.\u2026]+$/u.test(name)) return name;
   }
   if (contact.phoneE164?.trim()) return contact.phoneE164.trim();
   const waId = contact.waId?.trim() ?? '';

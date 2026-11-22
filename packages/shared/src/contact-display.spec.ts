@@ -29,4 +29,23 @@ describe('contact display name', () => {
     expect(contactDisplayName({ ...contact, waId: '201001234567@lid' }, { ownJid: '201001234567@s.whatsapp.net' })).toBe('الاسم الصحيح');
     expect(contactDisplayName({ ...contact, waId: '777777777777@lid' }, { ownLid: '777777777777:2@lid' })).toBe('أنت (رسائل شخصية)');
   });
+
+  it('ignores the historical current-number label on another contact and recognizes the real own LID', () => {
+    const account = { ownJid: '201001234567@s.whatsapp.net', ownLid: '777777777777@lid' };
+    const other = { waId: '888888888888@lid', phoneE164: '+201009999999', isSelf: true,
+      displayName: 'أنت (الرقم الحالي)', pushName: 'اسم المرسل الحقيقي' };
+    expect(contactDisplayName(other, account)).toBe('اسم المرسل الحقيقي');
+    expect(contactDisplayName({ ...other, pushName: undefined }, account)).toBe('+201009999999');
+    expect(contactDisplayName({ ...other, pushName: 'أنت' }, account)).toBe('+201009999999');
+    expect(contactDisplayName({ waId: account.ownLid, phoneE164: '+201001234567', isSelf: false }, account)).toBe('أنت (رسائل شخصية)');
+  });
+
+  it('filters known synthetic labels with formatting variations without changing ordinary names', () => {
+    for (const label of ['أنت', 'أنت (رسائل شخصية)', 'أنت (الرقم الحالي)', '\u200fأنت  ( الرقم  الحالي )\u200e', 'أنت（الرقم الحالي）']) {
+      expect(contactDisplayName({ displayName: label, pushName: label, waId: '201009999999@s.whatsapp.net' },
+        { ownJid: '201001234567@s.whatsapp.net' })).toBe('+201009999999');
+    }
+    expect(contactDisplayName({ displayName: 'أنت صديقي', waId: '201009999999@s.whatsapp.net' },
+      { ownJid: '201001234567@s.whatsapp.net' })).toBe('أنت صديقي');
+  });
 });

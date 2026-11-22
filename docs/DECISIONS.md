@@ -1,5 +1,10 @@
 # Hala CRM decisions
 
+## Legacy self-chat display names (2026-11-23)
+
+- A read-only production check confirmed that the linked account's own JID/LID were correct, while a different contact still had the old generated display name `أنت (الرقم الحالي)`. The display helper rejected `أنت` and `أنت (رسائل شخصية)` as fallback names, but allowed this historical variant to appear as an ordinary contact name.
+- Recognize these reserved self labels, including harmless whitespace/bidi variations, only as synthetic placeholders when choosing a fallback name. The self-chat designation still comes from the source account's verified identity. For other contacts, prefer their real sender name or phone. No production contact, identity, message or conversation rewrite is required.
+
 ## Grouped message push (2026-11-22)
 
 - At the user's request, show one updated notification per tenant/account/recipient/conversation, including the stored unread count and latest message preview. Counts follow the existing shared conversation read state; they are not an independent per-device unread counter. The first notification respects OS defaults, while updates to a visible conversation notification are silent.

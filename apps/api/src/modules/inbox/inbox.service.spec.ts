@@ -52,6 +52,25 @@ function createService(overrides: {
 }
 
 describe('inbox account existence', () => {
+  it('renders a legacy current-number name as a real sender name while identifying the account own LID', async () => {
+    const user = principal();
+    const accountId = new Types.ObjectId();
+    const record = { _id: new Types.ObjectId(), tenantId: new Types.ObjectId(user.tenantId), accountId,
+      contactId: new Types.ObjectId(), status: 'open', lastMessageAt: new Date(), lastMessageType: 'text', lastMessageDirection: 'in', unreadCount: 0 };
+    const contact = { waId: '888888888888@lid', phoneE164: '+201009999999', isSelf: true,
+      displayName: 'أنت (الرقم الحالي)', pushName: 'اسم جهة الاتصال' };
+    const query = (value: unknown) => ({ select: vi.fn().mockReturnThis(), lean: async () => value });
+    const service = createService({ contacts: { find: () => query([]), findOne: () => query(contact) },
+      conversations: { findOne: () => query(record) },
+      accounts: { findOne: () => query({ _id: accountId, phoneNumber: '201001234567',
+        ownJid: '201001234567@s.whatsapp.net', ownLid: '777777777777@lid' }) }
+    });
+    expect((await service.getConversationView(user, record._id.toString())).contactName).toBe('اسم جهة الاتصال');
+    Object.assign(contact, { waId: '777777777777@lid', phoneE164: '+201001234567', isSelf: false,
+      displayName: '', pushName: '' });
+    expect((await service.getConversationView(user, record._id.toString())).contactName).toBe('أنت (رسائل شخصية)');
+  });
+
   it('renders a shared contact as self only under its own connected account', async () => {
     const user = principal();
     const firstId = new Types.ObjectId(), otherId = new Types.ObjectId(), contactId = new Types.ObjectId();
