@@ -17,7 +17,7 @@ const disabledConfig: MessagePushConfig = { enabled: false };
 
 function createService(overrides: {
   installations?: unknown; users?: unknown; roles?: unknown; accounts?: unknown; conversations?: unknown;
-  firebase?: unknown; access?: unknown; bus?: unknown;
+  firebase?: unknown; access?: unknown; bus?: unknown; content?: unknown;
 } = {}) {
   return new MessagePushService(
     (overrides.installations ?? {}) as Model<MessagePushInstallationRecord>,
@@ -28,8 +28,8 @@ function createService(overrides: {
     (overrides.firebase ?? { config: () => disabledConfig, isConfigured: () => false }) as FirebaseMessagingService,
     (overrides.access ?? {}) as AccountAccessService,
     (overrides.bus ?? { consume: vi.fn().mockResolvedValue(true) }) as RedisBusService,
-    { describe: async () => ({ title: 'علي · المبيعات', body: 'private customer text', contactId: 'sender-id' }),
-      avatarUrl: () => '/api/v1/message-push/avatar/signed-photo' } as unknown as MessagePushContentService
+    (overrides.content ?? { describe: async () => ({ title: 'علي · المبيعات', body: 'private customer text', contactId: 'sender-id' }),
+      avatarUrl: () => '/api/v1/message-push/avatar/signed-photo' }) as MessagePushContentService
   );
 }
 
@@ -46,7 +46,7 @@ function incomingEvent(overrides: { direction?: 'in' | 'out'; type?: string } = 
   };
 }
 
-function createDeliveryHarness(options: { secondConsume?: boolean; unregistered?: boolean } = {}) {
+function createDeliveryHarness(options: { secondConsume?: boolean; unregistered?: boolean; content?: unknown } = {}) {
   const event = incomingEvent();
   const allowedId = new Types.ObjectId();
   const deniedId = new Types.ObjectId();
@@ -87,8 +87,8 @@ function createDeliveryHarness(options: { secondConsume?: boolean; unregistered?
   })) };
   const service = createService({ installations, users: { find: vi.fn(() => userQuery) },
     roles: { find: vi.fn(() => roleQuery) }, accounts: { exists: vi.fn().mockResolvedValue(true) },
-    conversations, firebase, access, bus });
-  return { service, event, allowedId, deniedId, fid, installations, sendEachForMulticast, bus, conversations, access };
+    conversations, firebase, access, bus, content: options.content });
+  return { service, event, allowedId, deniedId, fid, installations, sendEachForMulticast, bus, conversations, access, conversation };
 }
 
 describe('MessagePushService', () => {
@@ -134,6 +134,37 @@ describe('MessagePushService', () => {
     await harness.service.deliver({ ...harness.event, message: { ...harness.event.message, type: 'system' } });
     expect(harness.bus.consume).not.toHaveBeenCalled();
     expect(harness.sendEachForMulticast).not.toHaveBeenCalled();
+  });
+
+  it('sends the stored unread count with a stable, recipient-scoped silent replacement tag', async () => {
+    const h = createDeliveryHarness();
+    Object.assign(h.conversation, { unreadCount: 4, updatedAt: new Date('2026-11-22T00:00:00Z') });
+    await h.service.deliver(h.event);
+    const payload = h.sendEachForMulticast.mock.calls[0]?.[0];
+    expect(payload.notification).toEqual({ title: 'علي · المبيعات (4)', body: 'private customer text' });
+    expect(payload.webpush.notification).toMatchObject({
+      tag: `message:${h.event.tenantId}:${h.event.accountId}:${h.allowedId}:${h.event.conversationId}`, renotify: false,
+      data: { halaMessage: { recipientId: h.allowedId.toString(), unreadCount: '4',
+        revision: String(Date.parse('2026-11-22T00:00:00Z')) } }
+    });
+    expect(payload.data).toMatchObject({ groupingVersion: '1', tenantId: h.event.tenantId,
+      accountId: h.event.accountId, recipientId: h.allowedId.toString(), unreadCount: '4' });
+    Object.assign(h.conversation, { unreadCount: 1, updatedAt: new Date('2026-11-22T00:01:00Z') });
+    await h.service.deliver({ ...h.event, message: { ...h.event.message, _id: new Types.ObjectId().toString(), waMessageId: 'after-read' } });
+    expect(h.sendEachForMulticast.mock.calls[1]?.[0].data.unreadCount).toBe('1');
+    expect(h.sendEachForMulticast.mock.calls[1]?.[0].webpush.notification.tag).toBe(payload.webpush.notification.tag);
+  });
+
+  it('keeps rich Unicode notification payloads within the FCM byte limit', async () => {
+    const h = createDeliveryHarness({ content: {
+      describe: async () => ({ title: '🧑🏽'.repeat(96), body: '🎉'.repeat(201), contactId: 'sender' }),
+      avatarUrl: () => `/api/v1/message-push/avatar/${'x'.repeat(420)}`
+    } });
+    await h.service.deliver(h.event);
+    const { fids: _recipients, ...message } = h.sendEachForMulticast.mock.calls[0]![0];
+    expect(Buffer.byteLength(JSON.stringify(message), 'utf8')).toBeLessThan(4096);
+    expect(message.notification.body).toContain('🎉');
+    expect(message.notification.body).toMatch(/…$/);
   });
 
   it('removes Firebase installations that are no longer registered', async () => {

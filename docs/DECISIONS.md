@@ -1,5 +1,13 @@
 # Hala CRM decisions
 
+## Grouped message push (2026-11-22)
+
+- At the user's request, show one updated notification per tenant/account/recipient/conversation, including the stored unread count and latest message preview. Counts follow the existing shared conversation read state; they are not an independent per-device unread counter. The first notification respects OS defaults, while updates to a visible conversation notification are silent.
+- Extend the existing Angular registration with `hala-sw.js`, importing the installed NGSW runtime in the same root scope. Do not add Firebase's competing worker or replace the existing Push subscription/VAPID pair. Register the narrowly marked message-push listener before importing NGSW so it can stop NGSW from also rendering that push; all other push and click events retain Angular handling. This ordering deliberately differs from Angular's generic import-first example to prevent duplicate display. Keep Angular's PUSH client broadcast contract for handled messages.
+- Server payloads include scoped grouping metadata in both FCM data and web notification data, plus a stable tag and `renotify: false` as a fallback for clients awaiting the worker update. The worker serializes updates per tag, checks visible notifications, ignores stale revisions/duplicate message IDs, explicitly closes replaced notifications, and preserves newer preview content if events arrive out of order. Reading a chat locally closes its notification; logout/disable closes this recipient's visible message notifications. No message history is persisted in worker storage.
+- Keep title/body/photo previews subject to the existing fresh CASL recipient checks. Browser and OS control final notification appearance and support. No new dependency or environment variable is needed. Implementation references: installed Angular 22.2.4 NGSW `handlePush`/`handleClick`, Angular custom worker documentation, and the Notifications API `getNotifications`, `tag`, `silent` and `renotify` contracts.
+- Keep grouping metadata compact and bound preview/title sizes by UTF-8 bytes, including emoji, to leave room for signed sender photos within FCM's message size limit. The notification body is reused instead of copying message content into both metadata envelopes.
+
 ## Durable account cleanup (2026-11-22)
 
 - Account deletion and clear/reimport now return HTTP 202 after queuing an authorized cleanup. Their progress is persisted on the account and exposed through the existing scoped account views; retrying a failed operation resumes remaining media records. Both connected and disconnected Baileys accounts can clear chats.

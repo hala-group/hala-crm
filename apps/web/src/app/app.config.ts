@@ -10,7 +10,7 @@ export const appConfig: ApplicationConfig = {
     provideZonelessChangeDetection(),
     provideHttpClient(withInterceptors([apiInterceptor])),
     provideRouter(routes, withComponentInputBinding()),
-    provideServiceWorker('ngsw-worker.js', { enabled: !isDevMode(), registrationStrategy: 'registerImmediately' }),
+    provideServiceWorker('hala-sw.js', { enabled: !isDevMode(), registrationStrategy: 'registerImmediately' }),
     { provide: LOCALE_ID, useValue: 'ar' }
   ]
 };

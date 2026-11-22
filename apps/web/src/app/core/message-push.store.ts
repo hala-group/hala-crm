@@ -6,6 +6,7 @@ import { firstValueFrom, timeout } from 'rxjs';
 import { messagePushConfigSchema, type MessagePushConfig } from '@hala/shared';
 import { PermissionsStore } from './permissions.store';
 import { FirebasePushClient } from './firebase-push.client';
+import { closeMessageNotifications } from './message-notification.client';
 
 export const MessagePushStore = signalStore(
   { providedIn: 'root' },
@@ -83,6 +84,7 @@ export const MessagePushStore = signalStore(
         finally { patchState(store, { loading: false }); }
       },
       async disable(): Promise<void> {
+        const recipient = permissions.me();
         ++version; stop?.(); stop = undefined;
         patchState(store, { loading: true, error: '' });
         try {
@@ -90,15 +92,18 @@ export const MessagePushStore = signalStore(
           const fid = read();
           if (fid) await remove(fid);
           clear(); patchState(store, { enabled: false });
+          closeMessageNotifications(recipient);
         } catch { patchState(store, { error: 'تعذر إيقاف إشعارات الرسائل. حاول مجددًا.' }); }
         finally { patchState(store, { loading: false }); }
       },
       async logout(): Promise<void> {
+        const recipient = permissions.me();
         ++version; stop?.(); stop = undefined;
         await work.catch(() => {});
         const fid = read();
         try { if (fid) await remove(fid); }
         finally {
+          closeMessageNotifications(recipient);
           identity = ''; config = { enabled: false };
           patchState(store, { enabled: false, configured: false, loading: false, error: '' });
         }

@@ -31,6 +31,7 @@ import { type MessageView, subject } from '@hala/shared';
 import { FormField, form, required } from '@angular/forms/signals';
 import { ActivatedRoute, Router } from '@angular/router';
 import { DatePipe } from '@angular/common';
+import { closeMessageNotifications } from '../../core/message-notification.client';
 import {
   conversationPreview,
   conversationTimeFormat,
@@ -3451,8 +3452,11 @@ export class InboxComponent implements OnInit {
     const isUnread = conversation.unreadCount > 0;
     const url = isUnread ? `/api/v1/conversations/${conversation._id}/read` : `/api/v1/conversations/${conversation._id}/unread`;
     const targetUnreadCount = isUnread ? 0 : 1;
+    const me = this.permissions.me();
     this.inbox.apply({ ...conversation, unreadCount: targetUnreadCount });
-    void firstValueFrom(this.http.post(url, {})).catch(() => {
+    void firstValueFrom(this.http.post(url, {})).then(() => {
+      if (isUnread) closeMessageNotifications(me, conversation._id, conversation.accountId);
+    }).catch(() => {
       this.inbox.apply(conversation);
       this.actionError.set('تعذر تحديث حالة القراءة');
     });
@@ -3568,11 +3572,13 @@ export class InboxComponent implements OnInit {
       .then(() => this.scrollToLatestMessages(item._id))
       .catch(() => this.actionError.set('تعذر تحميل الرسائل'));
     if (item.unreadCount > 0) {
+      const me = this.permissions.me();
       this.inbox.apply({ ...item, unreadCount: 0 });
-      void firstValueFrom(this.http.post(`/api/v1/conversations/${item._id}/read`, {})).catch(
+      void firstValueFrom(this.http.post(`/api/v1/conversations/${item._id}/read`, {}))
+        .then(() => closeMessageNotifications(me, item._id, item.accountId)).catch(
         () => {},
       );
-    }
+    } else closeMessageNotifications(this.permissions.me(), item._id, item.accountId);
   }
   closeConversation(): void {
     this.messageFlowObserver?.disconnect();

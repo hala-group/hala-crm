@@ -6,6 +6,10 @@ On mobile, open the menu button for navigation and logout. Inbox search and the 
 
 Contact titles use saved WhatsApp contact names or incoming sender metadata. Outgoing echoes never rename or alias the recipient using the account owner's sender metadata. **أنت (رسائل شخصية)** applies only when the contact matches the source account's verified WhatsApp identity; shared contacts can have a different title under another account. Unavailable names fall back to a phone number rather than an unverified self label.
 
+## Message push
+
+Message push updates one notification per conversation with its stored unread count and latest preview. Replacements are silent while the first alert follows device defaults. The same Angular service-worker registration handles caching and notification clicks through `hala-sw.js`; existing Firebase opt-ins and VAPID keys are reused. After deploying this change, close old Hala CRM tabs and reopen the site once to activate the updated app/worker. Reading a conversation closes its notification on this browser; disabling message alerts or signing out closes this recipient's visible message notifications. Final notification appearance follows browser/OS support.
+
 ## Prerequisites
 
 Node.js 24 LTS, pnpm 11.25 or compatible, and Docker Compose. Copy `.env.example` to `.env`. Set two different random JWT secrets of at least 32 characters, plus `BOOTSTRAP_TENANT_SLUG`, `BOOTSTRAP_TENANT_NAME`, `BOOTSTRAP_OWNER_EMAIL`, and a `BOOTSTRAP_OWNER_PASSWORD` of at least 12 characters. Set `ENCRYPTION_KEY_BASE64` to a base64-encoded 32-byte random key (for example, generate one with `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"`). Keep `.env` private and back up the encryption key securely; losing it makes saved WhatsApp credentials unreadable.

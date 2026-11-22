@@ -38,6 +38,10 @@ server {
   location = /ngsw.json {
     add_header Cache-Control "no-cache, no-store, must-revalidate";
   }
+  location = /hala-sw.js {
+    add_header Cache-Control "no-cache, no-store, must-revalidate";
+    try_files $uri =404;
+  }
   location / {
     try_files $uri $uri/ /index.html;
   }

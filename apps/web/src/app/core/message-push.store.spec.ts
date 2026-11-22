@@ -86,6 +86,8 @@ describe('message push opt-in lifecycle', () => {
 
   it('removes only the message registration on opt-out and stops later callbacks', async () => {
     const h = setup(true);
+    const postMessage = vi.fn();
+    vi.stubGlobal('navigator', { serviceWorker: { controller: { postMessage } } });
     try {
       await h.store.initialize(); await h.store.disable(); h.notify('late-fid');
       expect(h.http.request).toHaveBeenCalledWith('DELETE', '/api/v1/message-push/installations', { body: { fid: 'fid1' } });
@@ -93,17 +95,21 @@ describe('message push opt-in lifecycle', () => {
       expect(h.http.post).toHaveBeenCalledOnce();
       expect(h.storage.size).toBe(0);
       expect(h.store.enabled()).toBe(false);
+      expect(postMessage).toHaveBeenCalledWith({ type: 'HALA_CLOSE_MESSAGE_NOTIFICATIONS', tenantId: me.tenantId, recipientId: me.id });
     } finally { h.injector.destroy(); }
   });
 
   it('removes the current user registration at logout and preserves opt-in for the next login', async () => {
     const h = setup(true);
+    const postMessage = vi.fn();
+    vi.stubGlobal('navigator', { serviceWorker: { controller: { postMessage } } });
     try {
       await h.store.initialize(); await h.store.logout(); h.notify('late-fid');
       expect(h.http.request).toHaveBeenCalledOnce();
       expect(h.http.post).toHaveBeenCalledOnce();
       expect(h.store.enabled()).toBe(false);
       expect(h.storage.size).toBe(1);
+      expect(postMessage).toHaveBeenCalledWith({ type: 'HALA_CLOSE_MESSAGE_NOTIFICATIONS', tenantId: me.tenantId, recipientId: me.id });
     } finally { h.injector.destroy(); }
   });
 

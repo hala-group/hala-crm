@@ -24,6 +24,18 @@ import { MessagePushContentService } from './message-push-content.service.js';
 
 type IncomingMessageEvent = Extract<DomainEvent, { type: 'message.created' }>;
 
+/** FCM counts UTF-8 bytes, including metadata. Leave room for signed photos and grouping fields. */
+function pushText(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value, 'utf8') <= maxBytes) return value;
+  let result = ''; let bytes = 0;
+  for (const character of value) {
+    const length = Buffer.byteLength(character, 'utf8');
+    if (bytes + length > maxBytes - 3) break;
+    result += character; bytes += length;
+  }
+  return `${result}…`;
+}
+
 @Injectable()
 export class MessagePushService {
   private readonly logger = new Logger(MessagePushService.name);
@@ -109,7 +121,7 @@ export class MessagePushService {
     if (!(await this.accounts.exists({ _id: accountId, tenantId }))) return;
     const conversation = await this.conversations
       .findOne({ _id: conversationId, tenantId, accountId })
-      .select('_id assignedUserId contactId')
+      .select('_id assignedUserId contactId unreadCount updatedAt')
       .lean();
     if (!conversation) return;
 
@@ -178,6 +190,8 @@ export class MessagePushService {
       .lean();
     if (!registrations.length) return;
     const preview = await this.content.describe(event, conversation.contactId.toString());
+    const senderTitle = pushText(preview.title, 192);
+    const body = pushText(preview.body, 384);
     const path = `/inbox/${encodeURIComponent(event.conversationId)}`;
     const recipients = new Map<string, typeof registrations>();
     for (const registration of registrations) {
@@ -188,12 +202,23 @@ export class MessagePushService {
     }
     for (const [userId, devices] of recipients) {
       const icon = this.content.avatarUrl(event, userId, preview.contactId);
+      const unreadCount = Math.max(1, Math.trunc(conversation.unreadCount || 1));
+      const revision = conversation.updatedAt?.getTime() ?? Date.now();
+      const messageTimestamp = Date.parse(event.message.timestamp) || revision;
+      const title = unreadCount > 1 ? `${senderTitle} (${unreadCount})` : senderTitle;
+      const grouping = {
+        groupingVersion: '1', tenantId: event.tenantId, accountId: event.accountId,
+        recipientId: userId, conversationId: event.conversationId, messageId: event.message._id,
+        unreadCount: String(unreadCount), revision: String(revision), messageTimestamp: String(messageTimestamp)
+      };
       for (let offset = 0; offset < devices.length; offset += 500) {
         const batch = devices.slice(offset, offset + 500);
         const response = await this.firebase.sendEachForMulticast({
           fids: batch.map((registration) => registration.fid),
-          notification: { title: preview.title, body: preview.body },
+          notification: { title, body },
           data: {
+            ...grouping,
+            icon,
             type: 'message.received',
             conversationId: event.conversationId,
             messageId: event.message._id,
@@ -202,12 +227,13 @@ export class MessagePushService {
           webpush: {
             headers: { TTL: '86400' },
             notification: {
-              title: preview.title,
-              body: preview.body,
+              title,
+              body,
               icon,
-              tag: `message:${event.conversationId}`,
-              renotify: true,
+              tag: `message:${event.tenantId}:${event.accountId}:${userId}:${event.conversationId}`,
+              renotify: false,
               data: {
+                halaMessage: grouping,
                 onActionClick: { default: { operation: 'navigateLastFocusedOrOpen', url: path } },
               },
             },
